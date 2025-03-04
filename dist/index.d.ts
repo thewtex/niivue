@@ -1,5 +1,5 @@
 import { mat4, vec3, vec4, vec2 } from 'gl-matrix';
-import * as nifti from 'nifti-reader-js';
+import { NIFTI1, NIFTI2 } from 'nifti-reader-js';
 import { WebSocketSubject } from 'rxjs/webSocket';
 
 type ColorMap = {
@@ -208,7 +208,8 @@ declare enum ImageType {
     HEAD = 15,
     DCM_FOLDER = 16,
     SRC = 17,
-    FIB = 18
+    FIB = 18,
+    BMP = 19
 }
 type ImageFromUrlOptions = {
     url: string;
@@ -320,7 +321,7 @@ declare class NVImage {
     oblique_angle?: number;
     maxShearDeg?: number;
     useQFormNotSForm: boolean;
-    alphaThreshold?: number;
+    colormapType?: number;
     pixDims?: number[];
     matRAS?: mat4;
     pixDimsRAS?: number[];
@@ -336,7 +337,7 @@ declare class NVImage {
     extentsMinOrtho?: number[];
     extentsMaxOrtho?: number[];
     mm2ortho?: mat4;
-    hdr: nifti.NIFTI1 | nifti.NIFTI2 | null;
+    hdr: NIFTI1 | NIFTI2 | null;
     imageType?: ImageType;
     img?: TypedVoxelArray;
     imaginary?: Float32Array;
@@ -385,26 +386,30 @@ declare class NVImage {
      * @param colorbarVisible - TODO
      * @param colormapLabel - TODO
      */
-    constructor(dataBuffer?: ArrayBuffer | ArrayBuffer[] | null, name?: string, colormap?: string, opacity?: number, pairedImgData?: ArrayBuffer | null, cal_min?: number, cal_max?: number, trustCalMinMax?: boolean, percentileFrac?: number, ignoreZeroVoxels?: boolean, useQFormNotSForm?: boolean, colormapNegative?: string, frame4D?: number, imageType?: ImageType, cal_minNeg?: number, cal_maxNeg?: number, colorbarVisible?: boolean, colormapLabel?: LUT | null);
+    constructor(dataBuffer?: ArrayBuffer | ArrayBuffer[] | null, name?: string, colormap?: string, opacity?: number, pairedImgData?: ArrayBuffer | null, cal_min?: number, cal_max?: number, trustCalMinMax?: boolean, percentileFrac?: number, ignoreZeroVoxels?: boolean, useQFormNotSForm?: boolean, colormapNegative?: string, frame4D?: number, imageType?: ImageType, cal_minNeg?: number, cal_maxNeg?: number, colorbarVisible?: boolean, colormapLabel?: LUT | null, colormapType?: number);
+    init(dataBuffer?: ArrayBuffer | ArrayBuffer[] | null, name?: string, colormap?: string, opacity?: number, _pairedImgData?: ArrayBuffer | null, cal_min?: number, cal_max?: number, trustCalMinMax?: boolean, percentileFrac?: number, ignoreZeroVoxels?: boolean, useQFormNotSForm?: boolean, colormapNegative?: string, frame4D?: number, imageType?: ImageType, cal_minNeg?: number, cal_maxNeg?: number, colorbarVisible?: boolean, colormapLabel?: LUT | null, colormapType?: number, imgRaw?: ArrayBuffer | null): void;
+    static new(dataBuffer?: ArrayBuffer | ArrayBuffer[] | null, name?: string, colormap?: string, opacity?: number, pairedImgData?: ArrayBuffer | null, cal_min?: number, cal_max?: number, trustCalMinMax?: boolean, percentileFrac?: number, ignoreZeroVoxels?: boolean, useQFormNotSForm?: boolean, colormapNegative?: string, frame4D?: number, imageType?: ImageType, cal_minNeg?: number, cal_maxNeg?: number, colorbarVisible?: boolean, colormapLabel?: LUT | null, colormapType?: number): Promise<NVImage>;
     computeObliqueAngle(mtx44: mat4): number;
     float32V1asRGBA(inImg: Float32Array): Uint8Array;
     loadImgV1(isFlipX?: boolean, isFlipY?: boolean, isFlipZ?: boolean): boolean;
     calculateOblique(): void;
     THD_daxes_to_NIFTI(xyzDelta: number[], xyzOrigin: number[], orientSpecific: number[]): void;
     SetPixDimFromSForm(): void;
-    readDICOM(buf: ArrayBuffer | ArrayBuffer[]): ArrayBuffer;
     readECAT(buffer: ArrayBuffer): ArrayBuffer;
     readV16(buffer: ArrayBuffer): ArrayBuffer;
+    imageDataFromArrayBuffer(buffer: ArrayBuffer): Promise<ImageData>;
+    readBMP(buffer: ArrayBuffer): Promise<Uint8Array>;
     readVMR(buffer: ArrayBuffer): ArrayBuffer;
-    readMGH(buffer: ArrayBuffer): ArrayBuffer;
-    readFIB(buffer: ArrayBuffer): [ArrayBuffer, Float32Array];
-    readSRC(buffer: ArrayBuffer): ArrayBuffer;
-    readHEAD(dataBuffer: ArrayBuffer, pairedImgData: ArrayBuffer | null): ArrayBuffer;
-    readMHA(buffer: ArrayBuffer, pairedImgData: ArrayBuffer | null): ArrayBuffer;
-    readMIF(buffer: ArrayBuffer, pairedImgData: ArrayBuffer | null): ArrayBuffer;
-    readNRRD(dataBuffer: ArrayBuffer, pairedImgData: ArrayBuffer | null): ArrayBuffer;
+    readMGH(buffer: ArrayBuffer): Promise<ArrayBuffer>;
+    readFIB(buffer: ArrayBuffer): Promise<[ArrayBuffer, Float32Array]>;
+    readSRC(buffer: ArrayBuffer): Promise<ArrayBuffer>;
+    readHEAD(dataBuffer: ArrayBuffer, pairedImgData: ArrayBuffer | null): Promise<ArrayBuffer>;
+    readMHA(buffer: ArrayBuffer, pairedImgData: ArrayBuffer | null): Promise<ArrayBuffer>;
+    readMIF(buffer: ArrayBuffer, pairedImgData: ArrayBuffer | null): Promise<ArrayBuffer>;
+    readNRRD(dataBuffer: ArrayBuffer, pairedImgData: ArrayBuffer | null): Promise<ArrayBuffer>;
     calculateRAS(): void;
-    img2RAS(): TypedVoxelArray;
+    hdr2RAS(nVolumes?: number): NIFTI1 | NIFTI2;
+    img2RAS(nVolume?: number): TypedVoxelArray;
     vox2mm(XYZ: number[], mtx: mat4): vec3;
     mm2vox(mm: number[], frac?: boolean): Float32Array | vec3;
     arrayEquals(a: unknown[], b: unknown[]): boolean;
@@ -417,12 +422,22 @@ declare class NVImage {
     set colorMap(cm: string);
     get opacity(): number;
     set opacity(opacity: number);
-    calMinMax(): number[];
+    /**
+     * set contrast/brightness to robust range (2%..98%)
+     * @param vol - volume for estimate (use -1 to use estimate on all loaded volumes; use INFINITY for current volume)
+     * @param isBorder - if true (default) only center of volume used for estimate
+     * @sets volume brightness and returns array [pct2, pct98, mnScale, mxScale]
+     * @see {@link https://niivue.github.io/niivue/features/timeseries2.html | live demo usage}
+     */
+    calMinMax(vol?: number, isBorder?: boolean): number[];
     intensityRaw2Scaled(raw: number): number;
     intensityScaled2Raw(scaled: number): number;
-    saveToUint8Array(fnm: string, drawing8?: Uint8Array | null): Uint8Array;
-    saveToDisk(fnm?: string, drawing8?: Uint8Array | null): Uint8Array;
-    static fetchDicomData(url: string, headers?: Record<string, string>): Promise<ArrayBuffer[]>;
+    saveToUint8Array(fnm: string, drawing8?: Uint8Array | null): Promise<Uint8Array>;
+    saveToDisk(fnm?: string, drawing8?: Uint8Array | null): Promise<Uint8Array>;
+    static fetchDicomData(url: string, headers?: Record<string, string>): Promise<Array<{
+        name: string;
+        data: ArrayBuffer;
+    }>>;
     static fetchPartial(url: string, bytesToLoad: number, headers?: Record<string, string>): Promise<Response>;
     /**
      * factory function to load and return a new NVImage instance from a given URL
@@ -446,7 +461,7 @@ declare class NVImage {
      */
     static createNiftiArray(dims?: number[], pixDims?: number[], affine?: number[], datatypeCode?: number, // DT_UINT8
     img?: Uint8Array): Uint8Array;
-    static createNiftiHeader(dims?: number[], pixDims?: number[], affine?: number[], datatypeCode?: number): nifti.NIFTI1;
+    static createNiftiHeader(dims?: number[], pixDims?: number[], affine?: number[], datatypeCode?: number): NIFTI1;
     /**
      * read a 3D slab of voxels from a volume
      * @param voxStart - first row, column and slice (RAS order) for selection
@@ -471,7 +486,7 @@ declare class NVImage {
      * @example
      * myImage = NVImage.loadFromBase64('SomeBase64String')
      */
-    static loadFromBase64({ base64, name, colormap, opacity, cal_min, cal_max, trustCalMinMax, percentileFrac, ignoreZeroVoxels, useQFormNotSForm, colormapNegative, frame4D, imageType, cal_minNeg, cal_maxNeg, colorbarVisible, colormapLabel }: ImageFromBase64): NVImage;
+    static loadFromBase64({ base64, name, colormap, opacity, cal_min, cal_max, trustCalMinMax, percentileFrac, ignoreZeroVoxels, useQFormNotSForm, colormapNegative, frame4D, imageType, cal_minNeg, cal_maxNeg, colorbarVisible, colormapLabel }: ImageFromBase64): Promise<NVImage>;
     /**
      * make a clone of a NVImage instance and return a new NVImage
      * @returns NVImage instance
@@ -598,7 +613,26 @@ declare enum DRAG_MODE {
     measurement = 2,
     pan = 3,
     slicer3D = 4,
-    callbackOnly = 5
+    callbackOnly = 5,
+    roiSelection = 6
+}
+declare enum DRAG_MODE_SECONDARY {
+    none = 0,
+    contrast = 1,
+    measurement = 2,
+    pan = 3,
+    slicer3D = 4,
+    callbackOnly = 5,
+    roiSelection = 6
+}
+declare enum DRAG_MODE_PRIMARY {
+    crosshair = 0,
+    windowing = 1
+}
+declare enum COLORMAP_TYPE {
+    MIN_TO_MAX = 0,
+    ZERO_TO_MAX_TRANSPARENT_BELOW_MIN = 1,
+    ZERO_TO_MAX_TRANSLUCENT_BELOW_MIN = 2
 }
 /**
  * NVConfigOptions
@@ -607,6 +641,7 @@ type NVConfigOptions = {
     textHeight: number;
     colorbarHeight: number;
     crosshairWidth: number;
+    crosshairWidthUnit: 'voxels' | 'mm' | 'percent';
     crosshairGap: number;
     rulerWidth: number;
     show3Dcrosshair: boolean;
@@ -631,16 +666,20 @@ type NVConfigOptions = {
     isRuler: boolean;
     isColorbar: boolean;
     isOrientCube: boolean;
+    tileMargin: number;
     multiplanarPadPixels: number;
     multiplanarForceRender: boolean;
     multiplanarEqualSize: boolean;
     multiplanarShowRender: SHOW_RENDER;
     isRadiologicalConvention: boolean;
     meshThicknessOn2D: number | string;
-    dragMode: DRAG_MODE;
+    dragMode: DRAG_MODE | DRAG_MODE_SECONDARY;
+    dragModePrimary: DRAG_MODE_PRIMARY;
     yoke3Dto2DZoom: boolean;
     isDepthPickMesh: boolean;
     isCornerOrientationText: boolean;
+    heroImageFraction: number;
+    heroSliceType: SLICE_TYPE;
     sagittalNoseLeft: boolean;
     isSliceMM: boolean;
     isV1SliceShader: boolean;
@@ -668,10 +707,26 @@ type NVConfigOptions = {
     renderOverlayBlend: number;
     sliceMosaicString: string;
     centerMosaic: boolean;
+    interactive: boolean;
+    penSize: number;
     clickToSegment: boolean;
     clickToSegmentRadius: number;
-    clickToSegmentSteps: number;
     clickToSegmentBright: boolean;
+    clickToSegmentAutoIntensity: boolean;
+    clickToSegmentIntensityMax: number;
+    clickToSegmentIntensityMin: number;
+    clickToSegmentPercent: number;
+    clickToSegmentMaxDistanceMM: number;
+    clickToSegmentIs2D: boolean;
+    selectionBoxLineThickness: number;
+    selectionBoxIsOutline: boolean;
+    scrollRequiresFocus: boolean;
+    showMeasureUnits: boolean;
+    measureTextJustify: 'start' | 'center' | 'end';
+    measureTextColor: number[];
+    measureLineColor: number[];
+    measureTextHeight: number;
+    isAlphaClipDark: boolean;
 };
 declare const DEFAULT_OPTIONS: NVConfigOptions;
 type SceneData = {
@@ -976,6 +1031,18 @@ type NiiVueLocation = {
     vox: vec3;
     xy: [number, number];
 };
+type SyncOpts = {
+    '3d'?: boolean;
+    '2d'?: boolean;
+    zoomPan?: boolean;
+    cal_min?: boolean;
+    cal_max?: boolean;
+    gamma?: boolean;
+    useSliceOffset?: boolean;
+    sliceType?: boolean;
+    crosshair?: boolean;
+    clipPlane?: boolean;
+};
 
 type ValuesArray = Array<{
     id: string;
@@ -1079,7 +1146,7 @@ type NVMeshLayer = {
     values: AnyNumberArray;
     outlineBorder?: number;
     isTransparentBelowCalMin?: boolean;
-    alphaThreshold?: boolean;
+    colormapType?: number;
     base64?: string;
     colorbarVisible?: boolean;
 };
@@ -1093,6 +1160,7 @@ declare const NVMeshLayerDefaults: {
     cal_max: number;
     cal_minNeg: number;
     cal_maxNeg: number;
+    colormapType: COLORMAP_TYPE;
     values: number[];
 };
 declare class NVMeshFromUrlOptions {
@@ -1207,15 +1275,16 @@ declare class NVMesh {
     updateFibers(gl: WebGL2RenderingContext): void;
     indexNearestXYZmm(Xmm: number, Ymm: number, Zmm: number): number[];
     unloadMesh(gl: WebGL2RenderingContext): void;
+    blendColormap(u8: Uint8Array, additiveRGBA: Uint8Array, layer: NVMeshLayer, mn: number, mx: number, lut: Uint8ClampedArray, invert?: boolean): void;
     updateMesh(gl: WebGL2RenderingContext): void;
     reverseFaces(gl: WebGL2RenderingContext): void;
     hierarchicalOrder(): number;
     decimateFaces(n: number, ntarget: number): void;
     decimateHierarchicalMesh(gl: WebGL2RenderingContext, order?: number): boolean;
-    setLayerProperty(id: number, key: keyof NVMeshLayer, val: number | string | boolean, gl: WebGL2RenderingContext): void;
+    setLayerProperty(id: number, key: keyof NVMeshLayer, val: number | string | boolean, gl: WebGL2RenderingContext): Promise<void>;
     setProperty(key: keyof this, val: unknown, gl: WebGL2RenderingContext): void;
     generatePosNormClr(pts: Float32Array, tris: Uint32Array, rgba255: Uint8Array): Float32Array;
-    static readMesh(buffer: ArrayBuffer, name: string, gl: WebGL2RenderingContext, opacity?: number, rgba255?: Uint8Array, visible?: boolean): NVMesh;
+    static readMesh(buffer: ArrayBuffer, name: string, gl: WebGL2RenderingContext, opacity?: number, rgba255?: Uint8Array, visible?: boolean): Promise<NVMesh>;
     static loadLayer(layer: NVMeshLayer, nvmesh: NVMesh): Promise<void>;
     /**
      * factory function to load and return a new NVMesh instance from a given URL
@@ -1232,35 +1301,6 @@ declare class NVMesh {
      * load and return a new NVMesh instance from a base64 encoded string
      */
     loadFromBase64({ base64, gl, name, opacity, rgba255, visible, layers }?: Partial<LoadFromBase64Params>): Promise<NVMesh>;
-    static readGII(buffer: ArrayBuffer): GII;
-    static readX3D(buffer: ArrayBuffer): X3D;
-    static readNII(buffer: ArrayBuffer, n_vert?: number): Uint8Array | Float32Array | Int32Array | Int16Array;
-    static readNII2(buffer: ArrayBuffer, n_vert?: number): Uint8Array | Float32Array | Int32Array | Int16Array;
-    static readMGH(buffer: ArrayBuffer): MGH;
-    static readSTL(buffer: ArrayBuffer): DefaultMeshType;
-    static readTxtSTL(buffer: ArrayBuffer): DefaultMeshType;
-    static readSRF(buffer: ArrayBuffer): DefaultMeshType;
-    static readFreeSurfer(buffer: ArrayBuffer): DefaultMeshType;
-    static readOBJ(buffer: ArrayBuffer): DefaultMeshType;
-    static readOFF(buffer: ArrayBuffer): DefaultMeshType;
-    static readGEO(buffer: ArrayBuffer, isFlipWinding?: boolean): DefaultMeshType;
-    static readICO(buffer: ArrayBuffer): DefaultMeshType;
-    static readPLY(buffer: ArrayBuffer): DefaultMeshType;
-    static readMZ3(buffer: ArrayBuffer, n_vert?: number): MZ3;
-    static readVTK(buffer: ArrayBuffer): VTK;
-    static readASC(buffer: ArrayBuffer): DefaultMeshType;
-    static readNV(buffer: ArrayBuffer): DefaultMeshType;
-    static readANNOT(buffer: ArrayBuffer, n_vert: number, isReadColortables?: boolean): ANNOT;
-    static readCURV(buffer: ArrayBuffer, n_vert: number): Float32Array;
-    static readSTC(buffer: ArrayBuffer, n_vert: number): Float32Array;
-    static readSMP(buffer: ArrayBuffer, n_vert: number): Float32Array;
-    static readTxtVTK(buffer: ArrayBuffer): VTK;
-    static readTRK(buffer: ArrayBuffer): TRK;
-    static readTCK(buffer: ArrayBuffer): TCK;
-    static readTSF(buffer: ArrayBuffer): Float32Array;
-    static readTT(buffer: ArrayBuffer): TT;
-    static readTRX(buffer: ArrayBuffer): TRX;
-    static readTRACT(buffer: ArrayBuffer): TRACT;
 }
 
 /**
@@ -1471,21 +1511,37 @@ declare class NVController {
 }
 
 type TypedNumberArray = Float64Array | Float32Array | Uint32Array | Uint16Array | Uint8Array | Int32Array | Int16Array | Int8Array;
-/**
- * Namespace for utility functions
- * @ignore
- */
 declare class NVUtilities {
     static arrayBufferToBase64(arrayBuffer: ArrayBuffer): string;
-    static readMatV4(buffer: ArrayBuffer): Record<string, TypedNumberArray>;
+    static decompress(data: Uint8Array): Promise<Uint8Array>;
+    static decompressToBuffer(data: Uint8Array): Promise<ArrayBuffer>;
+    static readMatV4(buffer: ArrayBuffer): Promise<Record<string, TypedNumberArray>>;
+    static b64toUint8(base64: string): Uint8Array;
     static uint8tob64(bytes: Uint8Array): string;
     static download(content: string | ArrayBuffer, fileName: string, contentType: string): void;
     static readFileAsync(file: Blob): Promise<ArrayBuffer>;
     static blobToBase64(blob: Blob): Promise<string>;
     static decompressBase64String(base64: string): Promise<string>;
     static compressToBase64String(string: string): Promise<string>;
+    /**
+     * Converts a string into a Uint8Array for use with compression/decompression methods (101arrowz/fflate: MIT License)
+     * @param str The string to encode
+     * @param latin1 Whether or not to interpret the data as Latin-1. This should
+     *               not need to be true unless decoding a binary string.
+     * @returns The string encoded in UTF-8/Latin-1 binary
+     */
+    static strToU8(str: string, latin1?: boolean): Uint8Array;
+    static compress(data: Uint8Array, format?: CompressionFormat): Promise<ArrayBuffer>;
     static compressStringToArrayBuffer(input: string): Promise<ArrayBuffer>;
     static isArrayBufferCompressed(buffer: ArrayBuffer): boolean;
+    /**
+     * Converts a Uint8Array to a string (101arrowz/fflate: MIT License)
+     * @param dat The data to decode to string
+     * @param latin1 Whether or not to interpret the data as Latin-1. This should
+     *               not need to be true unless encoding to binary string.
+     * @returns The original UTF-8/Latin-1 string
+     */
+    static strFromU8(dat: Uint8Array, latin1?: boolean): string;
     static decompressArrayBuffer(buffer: ArrayBuffer): Promise<string>;
     static arraysAreEqual(a: unknown[], b: unknown[]): boolean;
     /**
@@ -1515,14 +1571,14 @@ declare class NVUtilities {
  */
 declare class NVMeshLoaders {
     static readTRACT(buffer: ArrayBuffer): TRACT;
-    static readTT(buffer: ArrayBuffer): TT;
-    static readTRX(buffer: ArrayBuffer): TRX;
+    static readTT(buffer: ArrayBuffer): Promise<TT>;
+    static readTRX(buffer: ArrayBuffer): Promise<TRX>;
     static readTSF(buffer: ArrayBuffer, n_vert?: number): Float32Array;
     static readTCK(buffer: ArrayBuffer): TCK;
-    static readTRK(buffer: ArrayBuffer): TRK;
+    static readTRK(buffer: ArrayBuffer): Promise<TRK>;
     static readTxtVTK(buffer: ArrayBuffer): VTK;
-    static readLayer(name: string, buffer: ArrayBuffer, nvmesh: NVMesh, opacity?: number, colormap?: string, colormapNegative?: string, useNegativeCmap?: boolean, cal_min?: number | null, cal_max?: number | null, outlineBorder?: number): NVMeshLayer | undefined;
-    static readSMP(buffer: ArrayBuffer, n_vert: number): Float32Array;
+    static readLayer(name: string, buffer: ArrayBuffer, nvmesh: NVMesh, opacity?: number, colormap?: string, colormapNegative?: string, useNegativeCmap?: boolean, cal_min?: number | null, cal_max?: number | null, outlineBorder?: number): Promise<NVMeshLayer | undefined>;
+    static readSMP(buffer: ArrayBuffer, n_vert: number): Promise<Float32Array>;
     static readSTC(buffer: ArrayBuffer, n_vert: number): Float32Array;
     static isCurv(buffer: ArrayBuffer): boolean;
     static readCURV(buffer: ArrayBuffer, n_vert: number): Float32Array;
@@ -1530,24 +1586,25 @@ declare class NVMeshLoaders {
     static readNV(buffer: ArrayBuffer): DefaultMeshType;
     static readASC(buffer: ArrayBuffer): DefaultMeshType;
     static readVTK(buffer: ArrayBuffer): VTK;
+    static readWRL(buffer: ArrayBuffer): DefaultMeshType;
     static readDFS(buffer: ArrayBuffer): DefaultMeshType;
-    static readMZ3(buffer: ArrayBuffer, n_vert?: number): MZ3;
+    static readMZ3(buffer: ArrayBuffer, n_vert?: number): Promise<MZ3>;
     static readPLY(buffer: ArrayBuffer): DefaultMeshType;
     static readICO(buffer: ArrayBuffer): DefaultMeshType;
     static readGEO(buffer: ArrayBuffer, isFlipWinding?: boolean): DefaultMeshType;
     static readOFF(buffer: ArrayBuffer): DefaultMeshType;
     static readOBJMNI(buffer: ArrayBuffer): DefaultMeshType;
-    static readOBJ(buffer: ArrayBuffer): DefaultMeshType;
+    static readOBJ(buffer: ArrayBuffer): Promise<DefaultMeshType>;
     static readFreeSurfer(buffer: ArrayBuffer): DefaultMeshType;
-    static readSRF(buffer: ArrayBuffer): DefaultMeshType;
+    static readSRF(buffer: ArrayBuffer): Promise<DefaultMeshType>;
     static readTxtSTL(buffer: ArrayBuffer): DefaultMeshType;
     static readSTL(buffer: ArrayBuffer): DefaultMeshType;
     static decimateLayerVertices(nVertLayer: number, nVertMesh: number): number;
-    static readNII2(buffer: ArrayBuffer, n_vert?: number, anatomicalStructurePrimary?: string): Int32Array | Float32Array | Int16Array | Uint8Array;
-    static readNII(buffer: ArrayBuffer, n_vert?: number, anatomicalStructurePrimary?: string): Float32Array | Uint8Array | Int32Array | Int16Array;
-    static readMGH(buffer: ArrayBuffer, n_vert?: number, isReadColortables?: boolean): MGH;
+    static readNII2(buffer: ArrayBuffer, n_vert?: number, anatomicalStructurePrimary?: string): Promise<Int32Array | Float32Array | Int16Array | Uint8Array>;
+    static readNII(buffer: ArrayBuffer, n_vert?: number, anatomicalStructurePrimary?: string): Promise<Float32Array | Uint8Array | Int32Array | Int16Array>;
+    static readMGH(buffer: ArrayBuffer, n_vert?: number, isReadColortables?: boolean): Promise<MGH>;
     static readX3D(buffer: ArrayBuffer): X3D;
-    static readGII(buffer: ArrayBuffer, n_vert?: number): GII;
+    static readGII(buffer: ArrayBuffer, n_vert?: number): Promise<GII>;
 }
 
 type Extents = {
@@ -1560,11 +1617,13 @@ type Extents = {
  */
 declare class NVMeshUtilities {
     static getClusterBoundaryU8(u8: Uint8Array, faces: number[] | Uint32Array): boolean[];
-    static createMZ3(vertices: Float32Array, indices: Uint32Array, compress?: boolean): ArrayBuffer;
+    static gzip(data: Uint8Array): Promise<Uint8Array>;
+    static createMZ3(vertices: Float32Array, indices: Uint32Array, compress?: boolean, colors?: Uint8Array | null): ArrayBuffer;
+    static createMZ3Async(vertices: Float32Array, indices: Uint32Array, compress?: boolean, colors?: Uint8Array | null): Promise<ArrayBuffer>;
     static createOBJ(vertices: Float32Array, indices: Uint32Array): ArrayBuffer;
     static createSTL(vertices: Float32Array, indices: Uint32Array): ArrayBuffer;
     static downloadArrayBuffer(buffer: ArrayBuffer, filename: string): void;
-    static saveMesh(vertices: Float32Array, indices: Uint32Array, filename?: string, compress?: boolean): ArrayBuffer;
+    static saveMesh(vertices: Float32Array, indices: Uint32Array, filename?: string, compress?: boolean): Promise<ArrayBuffer>;
     static getClusterBoundary(rgba8: Uint8Array, faces: number[] | Uint32Array): boolean[];
     static getExtents(pts: number[] | Float32Array): Extents;
     static generateNormals(pts: number[] | Float32Array, tris: number[] | Uint32Array): Float32Array;
@@ -1574,7 +1633,7 @@ type ColormapListEntry = {
     name: string;
     min: number;
     max: number;
-    alphaThreshold: boolean;
+    isColorbarFromZero: boolean;
     negative: boolean;
     visible: boolean;
     invert: boolean;
@@ -1586,6 +1645,7 @@ type Graph = {
     vols: number[];
     autoSizeMultiplanar: boolean;
     normalizeValues: boolean;
+    isRangeCalMinMax: boolean;
     backColor?: number[];
     lineColor?: number[];
     textColor?: number[];
@@ -1612,6 +1672,7 @@ type Descriptive = {
     cal_max: number;
     robust_min: number;
     robust_max: number;
+    area: number | null;
 };
 type SliceScale = {
     volScale: number[];
@@ -1656,11 +1717,21 @@ type UIData = {
     lastTwoTouchDistance: number;
     multiTouchGesture: boolean;
     dpr?: number;
+    windowX: number;
+    windowY: number;
 };
 type SaveImageOptions = {
     filename: string;
     isSaveDrawing: boolean;
     volumeByIndex: number;
+};
+type DicomLoaderInput = ArrayBuffer | ArrayBuffer[] | File[];
+type DicomLoader = {
+    loader: (data: DicomLoaderInput) => Promise<Array<{
+        name: string;
+        data: ArrayBuffer;
+    }>>;
+    toExt: string;
 };
 /**
  * Niivue can be attached to a canvas. An instance of Niivue contains methods for
@@ -1670,6 +1741,8 @@ type SaveImageOptions = {
  * let niivue = new Niivue({crosshairColor: [0,1,0,0.5], textHeight: 0.5}) // a see-through green crosshair, and larger text labels
  */
 declare class Niivue {
+    loaders: {};
+    dicomLoader: DicomLoader | null;
     canvas: HTMLCanvasElement | null;
     _gl: WebGL2RenderingContext | null;
     isBusy: boolean;
@@ -1683,6 +1756,9 @@ declare class Niivue {
     drawUndoBitmaps: Uint8Array[];
     drawLut: LUT;
     drawOpacity: number;
+    clickToSegmentIsGrowing: boolean;
+    clickToSegmentGrowingBitmap: Uint8Array | null;
+    clickToSegmentXY: number[];
     renderDrawAmbientOcclusion: number;
     colorbarHeight: number;
     drawPenLocation: number[];
@@ -1696,6 +1772,7 @@ declare class Niivue {
     orientCubeShader?: Shader;
     orientCubeShaderVAO: WebGLVertexArrayObject | null;
     rectShader?: Shader;
+    rectOutlineShader?: Shader;
     renderShader?: Shader;
     lineShader?: Shader;
     line3DShader?: Shader;
@@ -1735,12 +1812,11 @@ declare class Niivue {
     backgroundMasksOverlays: number;
     overlayOutlineWidth: number;
     overlayAlphaShader: number;
-    isAlphaClipDark: boolean;
     position?: vec3;
     extentsMin?: vec3;
     extentsMax?: vec3;
     private resizeObserver;
-    syncOpts: Record<string, unknown>;
+    syncOpts: SyncOpts;
     readyForSync: boolean;
     uiData: UIData;
     back: NVImage | null;
@@ -1761,7 +1837,7 @@ declare class Niivue {
         screen2frac?: number[];
     }>;
     cuboidVertexBuffer?: WebGLBuffer;
-    otherNV: Niivue | Niivue[] | null;
+    otherNV: Niivue[] | null;
     volumeObject3D: NiivueObject3D | null;
     pivot3D: number[];
     furthestFromPivot: number;
@@ -1953,6 +2029,7 @@ declare class Niivue {
     onCustomMeshShaderAdded: (fragmentShaderText: string, name: string) => void;
     onMeshShaderChanged: (meshIndex: number, shaderIndex: number) => void;
     onMeshPropertyChanged: (meshIndex: number, key: string, val: unknown) => void;
+    onDicomLoaderFinishedWithImages: (files: NVImage[] | NVMesh[]) => void;
     /**
      * callback function to run when the user loads a new NiiVue document
      * @example
@@ -1966,6 +2043,8 @@ declare class Niivue {
     get opts(): NVConfigOptions;
     get sliceMosaicString(): string;
     set sliceMosaicString(newSliceMosaicString: string);
+    get isAlphaClipDark(): boolean;
+    set isAlphaClipDark(newVal: boolean);
     mediaUrlMap: Map<NVImage | NVMesh, string>;
     initialized: boolean;
     currentDrawUndoBitmap: number;
@@ -2016,7 +2095,7 @@ declare class Niivue {
      * @deprecated use broadcastTo instead
      * @see {@link https://niivue.github.io/niivue/features/sync.mesh.html | live demo usage}
      */
-    syncWith(otherNV: Niivue, syncOpts?: {
+    syncWith(otherNV: Niivue | Niivue[], syncOpts?: {
         '2d': boolean;
         '3d': boolean;
     }): void;
@@ -2035,6 +2114,15 @@ declare class Niivue {
         '2d': boolean;
         '3d': boolean;
     }): void;
+    doSync3d(otherNV: Niivue): void;
+    doSync2d(otherNV: Niivue): void;
+    doSyncGamma(otherNV: Niivue): void;
+    doSyncZoomPan(otherNV: Niivue): void;
+    doSyncCrosshair(otherNV: Niivue): void;
+    doSyncCalMin(otherNV: Niivue): void;
+    doSyncCalMax(otherNV: Niivue): void;
+    doSyncSliceType(otherNV: Niivue): void;
+    doSyncClipPlane(otherNV: Niivue): void;
     /**
      * Sync the scene controls (orientation, crosshair location, etc.) from one Niivue instance to another. useful for using one canvas to drive another.
      * @internal
@@ -2091,6 +2179,7 @@ declare class Niivue {
     checkMultitouch(e: TouchEvent): void;
     touchStartListener(e: TouchEvent): void;
     touchEndListener(e: TouchEvent): void;
+    windowingHandler(x: number, y: number, volIdx?: number): void;
     mouseMoveListener(e: MouseEvent): void;
     resetBriCon(msg?: TouchEvent | MouseEvent | null): void;
     setDragStart(x: number, y: number): void;
@@ -2120,6 +2209,7 @@ declare class Niivue {
      * @see {@link https://niivue.github.io/niivue/features/document.3d.html | live demo usage}
      */
     removeVolumeByUrl(url: string): void;
+    traverseFileTree(item: any, path: string, fileArray: any): Promise<File[]>;
     readDirectory(directory: FileSystemDirectoryEntry): FileSystemEntry[];
     /**
      * Returns boolean: true if filename ends with mesh extension (TRK, pial, etc)
@@ -2138,7 +2228,10 @@ declare class Niivue {
      * @param file - File object
      */
     loadFromFile(file: File): Promise<void>;
-    dropListener(e: DragEvent): void;
+    useLoader(loader: unknown, fileExt: string, toExt: string): void;
+    useDicomLoader(loader: DicomLoader): void;
+    getDicomLoader(): DicomLoader;
+    dropListener(e: DragEvent): Promise<void>;
     /**
      * insert a gap between slices of a mutliplanar view.
      * @param pixels - spacing between tiles of multiplanar view
@@ -2160,6 +2253,13 @@ declare class Niivue {
      * @see {@link https://niivue.github.io/niivue/features/worldspace2.html | live demo usage}
      */
     setCornerOrientationText(isCornerOrientationText: boolean): void;
+    /**
+     * determine proportion of screen real estate devoted to rendering in multiplanar view.
+     * @param fraction - proportion of screen devoted to primary (hero) image (0 to disable)
+     * @example niivue.setHeroImage(0.5)
+     * @see {@link https://niivue.github.io/niivue/features/layout.html | live demo usage}
+     */
+    setHeroImage(fraction: number): void;
     /**
      * control whether 2D slices use radiological or neurological convention.
      * @param isRadiologicalConvention - new display convention
@@ -2285,7 +2385,7 @@ declare class Niivue {
      * @example niivue.saveImage({ filename: "myimage.nii.gz", isSaveDrawing: true });
      * @see {@link https://niivue.github.io/niivue/features/draw.ui.html | live demo usage}
      */
-    saveImage(options?: SaveImageOptions): Uint8Array | boolean;
+    saveImage(options?: SaveImageOptions): Promise<boolean | Uint8Array>;
     getMeshIndexByID(id: string | number): number;
     /**
      * change property of mesh, tractogram or connectome
@@ -2332,7 +2432,7 @@ declare class Niivue {
      * @example niivue.setMeshLayerProperty(niivue.meshes[0].id, 0, 'frame4D', 22)
      * @see {@link https://niivue.github.io/niivue/features/mesh.4D.html | live demo usage}
      */
-    setMeshLayerProperty(mesh: number, layer: number, key: keyof NVMeshLayer, val: number): void;
+    setMeshLayerProperty(mesh: number, layer: number, key: keyof NVMeshLayer, val: number): Promise<void>;
     /**
      * adjust offset position and scale of 2D sliceScale
      * @param xyzmmZoom - first three components are spatial, fourth is scaling
@@ -2575,7 +2675,7 @@ declare class Niivue {
      * @returns  Niivue instance
      * @see {@link https://niivue.github.io/niivue/features/document.load.html | live demo usage}
      */
-    loadDocument(document: NVDocument): this;
+    loadDocument(document: NVDocument): Promise<this>;
     /**
    * generates JavaScript to load the current scene as a document
    * @param canvasId - id of canvas NiiVue will be attached to
@@ -2617,6 +2717,8 @@ declare class Niivue {
      * @see {@link https://niivue.github.io/niivue/features/document.3d.html | live demo usage}
      */
     saveDocument(fileName?: string, compress?: boolean): Promise<void>;
+    loadImages(images: Array<ImageFromUrlOptions | LoadFromUrlParams>): Promise<this>;
+    loadDicoms(dicomList: ImageFromUrlOptions[]): Promise<this>;
     /**
      * load an array of volume objects
      * @param volumeList - the array of objects to load. each object must have a resolvable "url" property at a minimum
@@ -2695,9 +2797,17 @@ declare class Niivue {
     drawGrowCut(): void;
     drawPt(x: number, y: number, z: number, penValue: number): void;
     drawPenLine(ptA: number[], ptB: number[], penValue: number): void;
+    /**
+     * Performs a 1-voxel binary dilation on a connected cluster within the drawing mask using the drawFloodFillCore function.
+     *
+     * @param seedXYZ -  voxel index of the seed voxel in the mask array.
+     * @param neighbors - Number of neighbors to consider for connectivity and dilation (6, 18, or 26).
+     */
+    drawingBinaryDilationWithSeed(seedXYZ: number[], // seed voxel x,y,z
+    neighbors?: 6 | 18 | 26): void;
     drawFloodFillCore(img: Uint8Array, seedVx: number, neighbors?: number): void;
     drawFloodFill(seedXYZ: number[], newColor?: number, growSelectedCluster?: number, // if non-zero, growth based on background intensity POSITIVE_INFINITY for selected or bright, NEGATIVE_INFINITY for selected or darker
-    forceMin?: number, forceMax?: number, neighbors?: number): void;
+    forceMin?: number, forceMax?: number, neighbors?: number, maxDistanceMM?: number, is2D?: boolean): void;
     drawPenFilled(): void;
     /**
      * close drawing: make sure you have saved any changes before calling this!
@@ -2711,7 +2821,7 @@ declare class Niivue {
      * @example niivue.refreshDrawing();
      * @see {@link https://niivue.github.io/niivue/features/cactus.html | live demo usage}
      */
-    refreshDrawing(isForceRedraw?: boolean): void;
+    refreshDrawing(isForceRedraw?: boolean, useClickToSegmentBitmap?: boolean): void;
     r8Tex(texID: WebGLTexture | null, activeID: number, dims: number[], isInit?: boolean): WebGLTexture | null;
     rgbaTex(texID: WebGLTexture | null, activeID: number, dims: number[], isInit?: boolean): WebGLTexture | null;
     requestCORSIfNotSameOrigin(img: HTMLImageElement, url: string): void;
@@ -2826,13 +2936,33 @@ declare class Niivue {
     updateGLVolume(): void;
     /**
      * basic statistics for selected voxel-based image
-     * @param layer - selects image to describe
-     * @param masks - are optional binary images to filter voxles
-     * @returns numeric values to describe image
-     * @example niivue.getDescriptives(0);
+     * @param options - an object containing the following properties:
+     *   - layer: selects image to describe
+     *   - masks: optional binary images to filter voxels
+     *   - drawingIsMask: a boolean indicating if the drawing is used as a mask
+     *   - roiIsMask: a boolean indicating if the ROI is used as a mask
+     *   - startVox: the starting voxel coordinates
+     *   - endVox: the ending voxel coordinates
+     * @returns numeric values to describe image or regions of images
+     * @example
+     * niivue.getDescriptives({
+     *   layer: 0,
+     *   masks: [],
+     *   drawingIsMask: true, // drawingIsMask and roiIsMask are mutually exclusive
+     *   roiIsMask: false,
+     *   startVox: [10, 20, 30], // ignored if roiIsMask is false
+     *   endVox: [40, 50, 60] // ignored if roiIsMask is false
+     * });
      * @see {@link https://niivue.github.io/niivue/features/draw2.html | live demo usage}
      */
-    getDescriptives(layer?: number, masks?: any[], drawingIsMask?: boolean): Descriptive;
+    getDescriptives(options: {
+        layer?: number;
+        masks?: number[];
+        drawingIsMask?: boolean;
+        roiIsMask?: boolean;
+        startVox?: number[];
+        endVox?: number[];
+    }): Descriptive;
     refreshLayers(overlayItem: NVImage, layer: number): void;
     /**
      * query all available color maps that can be applied to volumes
@@ -2950,9 +3080,11 @@ declare class Niivue {
     sliceScroll3D(posChange?: number): void;
     deleteThumbnail(): void;
     inGraphTile(x: number, y: number): boolean;
+    updateBitmapFromClickToSegment(): void;
+    sumBitmap(img: Uint8Array): number;
     mouseClick(x: number, y: number, posChange?: number, isDelta?: boolean): void;
     drawRuler(): void;
-    drawRuler10cm(startXYendXY: number[]): void;
+    drawRuler10cm(startXYendXY: number[], rulerColor: number[], rulerWidth?: number): void;
     screenXY2mm(x: number, y: number, forceSlice?: number): vec4;
     dragForPanZoom(startXYendXY: number[]): void;
     dragForCenterButton(startXYendXY: number[]): void;
@@ -3043,7 +3175,7 @@ declare class Niivue {
     frac2mm(frac: vec3, volIdx?: number, isForceSliceMM?: boolean): vec4;
     screenXY2TextureFrac(x: number, y: number, i: number, restrict0to1?: boolean): vec3;
     canvasPos2frac(canvasPos: number[]): vec3;
-    scaleSlice(w: number, h: number, widthPadPixels?: number, heightPadPixels?: number): number[];
+    scaleSlice(w: number, h: number, padPixelsWH?: [number, number], canvasWH?: [number, number]): number[];
     drawThumbnail(): void;
     drawLine(startXYendXY: number[], thickness?: number, lineColor?: number[]): void;
     draw3DLine(startXY: vec2, endXYZ: vec3, thickness?: number, lineColor?: number[]): void;
@@ -3064,4 +3196,4 @@ declare class Niivue {
     set gl(gl: WebGL2RenderingContext | null);
 }
 
-export { type Connectome, type ConnectomeOptions, DEFAULT_OPTIONS, DRAG_MODE, type DocumentData, type DragReleaseParams, type ExportDocumentData, INITIAL_SCENE_DATA, LabelAnchorPoint, LabelLineTerminator, LabelTextAlignment, type LegacyConnectome, type LegacyNodes, MULTIPLANAR_TYPE, type NVConfigOptions, type NVConnectomeEdge, type NVConnectomeNode, NVController, NVDocument, NVImage, NVImageFromUrlOptions, NVLabel3D, NVLabel3DStyle, NVMesh, NVMeshFromUrlOptions, NVMeshLayerDefaults, NVMeshLoaders, NVMeshUtilities, NVUtilities, type NiftiHeader, type NiiVueLocation, type NiiVueLocationValue, Niivue, type Point, SHOW_RENDER, SLICE_TYPE, type Scene, type Volume, cmapper, ColorTables as colortables };
+export { COLORMAP_TYPE, type Connectome, type ConnectomeOptions, DEFAULT_OPTIONS, DRAG_MODE, DRAG_MODE_PRIMARY, DRAG_MODE_SECONDARY, type DicomLoader, type DicomLoaderInput, type DocumentData, type DragReleaseParams, type ExportDocumentData, INITIAL_SCENE_DATA, LabelAnchorPoint, LabelLineTerminator, LabelTextAlignment, type LegacyConnectome, type LegacyNodes, MULTIPLANAR_TYPE, type NVConfigOptions, type NVConnectomeEdge, type NVConnectomeNode, NVController, NVDocument, NVImage, NVImageFromUrlOptions, NVLabel3D, NVLabel3DStyle, NVMesh, NVMeshFromUrlOptions, NVMeshLayerDefaults, NVMeshLoaders, NVMeshUtilities, NVUtilities, type NiftiHeader, type NiiVueLocation, type NiiVueLocationValue, Niivue, type Point, SHOW_RENDER, SLICE_TYPE, type Scene, type SyncOpts, type Volume, cmapper, ColorTables as colortables };
