@@ -66,7 +66,6 @@
         loadingText: "there are no images",
         backColor: [1, 1, 1, 1],
         show3Dcrosshair: true,
-        logging: true,
       });
       var meshLayersList1 = [
         {
@@ -77,7 +76,7 @@
           opacity: 222 / 255,
         },
       ];
-      nv1.attachTo("gl1");
+      await nv1.attachTo("gl1");
       await nv1.loadMeshes([
         {
           url: "../images/fs_LR.32k.L.inflated.surf.gii",
@@ -92,7 +91,7 @@
         false
       );
       document.getElementById("check10").checked =
-        nv1.opts.isHighResolutionCapable;
+        nv1.opts.forceDevicePixelRatio === 0;
       let cmaps = nv1.meshShaderNames();
       let cmapEl = document.getElementById("shaders");
       for (let i = 0; i < cmaps.length; i++) {

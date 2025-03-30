@@ -72,7 +72,6 @@
           "&nbsp;&nbsp;" + data.string;
       }
       let defaults = {
-        logging: true,
         dragAndDropEnabled: true,
         backColor: [0.3, 0.3, 0.3, 1],
         show3Dcrosshair: true,
@@ -80,7 +79,7 @@
       };
       var nv1 = new niivue.Niivue(defaults);
       nv1.setRadiologicalConvention(false);
-      nv1.attachTo("gl1");
+      await nv1.attachTo("gl1");
       var volumeList1 = [
         {
           url: "../images/torso.nii.gz",

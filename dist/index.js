@@ -2752,7 +2752,7 @@ var forEach3 = function() {
 }();
 
 // package.json
-var version = "0.50.0";
+var version = "0.51.0";
 
 // src/logger.ts
 var _Log = class _Log {
@@ -3295,7 +3295,7 @@ out vec4 fColor;
 		}
 	}
 ` + kRenderTail;
-var fragRenderGradientShader = `#version 300 es
+var kFragRenderGradientDecl = `#version 300 es
 #line 215
 precision highp int;
 precision highp float;
@@ -3320,9 +3320,11 @@ uniform highp sampler2D colormap;
 uniform highp sampler2D matCap;
 uniform vec2 renderDrawAmbientOcclusionXY;
 uniform float gradientAmount;
+uniform float gradientOpacity[256];
 in vec3 vColor;
 out vec4 fColor;
-` + kRenderFunc + kRenderInit + `
+`;
+var fragRenderGradientShader = kFragRenderGradientDecl + kRenderFunc + kRenderInit + `
 	float startPos = samplePos.a;
 	float clipClose = clipPos.a + 3.0 * deltaDir.a; //do not apply gradients near clip plane
 	float brighten = 2.0; //modulating makes average intensity darker 0.5 * 0.5 = 0.25
@@ -3341,6 +3343,30 @@ out vec4 fColor;
 			mc = mix(vec4(1.0), mc, gradientAmount);
 			if (samplePos.a > clipClose)
 				colorSample.rgb *= mc.rgb;
+			if (firstHit.a > lenNoClip)
+				firstHit = samplePos;
+			backNearest = min(backNearest, samplePos.a);
+			colorSample.a = 1.0-pow((1.0 - colorSample.a), opacityCorrection);
+			int gradIdx = int(grad.a * 255.0);
+			colorSample.a *= gradientOpacity[gradIdx];
+			colorSample.rgb *= colorSample.a;
+			colAcc= (1.0 - colAcc.a) * colorSample + colAcc;
+			if ( colAcc.a > earlyTermination )
+				break;
+		}
+		samplePos += deltaDir; //advance ray position
+	}
+` + kRenderTail;
+var fragRenderGradientValuesShader = kFragRenderGradientDecl + kRenderFunc + kRenderInit + `
+	float startPos = samplePos.a;
+	float clipClose = clipPos.a + 3.0 * deltaDir.a; //do not apply gradients near clip plane
+	float brighten = 2.0; //modulating makes average intensity darker 0.5 * 0.5 = 0.25
+	//vec4 prevGrad = vec4(0.0);
+	while (samplePos.a <= len) {
+		vec4 colorSample = texture(volume, samplePos.xyz);
+		if (colorSample.a >= 0.0) {
+			vec4 grad = texture(gradient, samplePos.xyz);
+			colorSample.rgb = abs(normalize(grad.rgb*2.0 - 1.0));
 			if (firstHit.a > lenNoClip)
 				firstHit = samplePos;
 			backNearest = min(backNearest, samplePos.a);
@@ -4585,7 +4611,61 @@ void main(void) {
  samp += texture(intensityVol,vx+vec3(-dX,-dY,-dZ));
  FragColor = samp*0.125;
 }`;
-var sobelFragShader = `#version 300 es
+var sobelBlurFragShader = `#version 300 es
+#line 298
+precision highp int;
+precision highp float;
+in vec2 TexCoord;
+out vec4 FragColor;
+uniform float coordZ;
+uniform float dX;
+uniform float dY;
+uniform float dZ;
+uniform highp sampler3D intensityVol;
+void main(void) {
+ vec3 vx = vec3(TexCoord.xy, coordZ);
+ vec4 XYZ = texture(intensityVol,vx+vec3(+dX,+dY,+dZ));
+ vec4 OYZ = texture(intensityVol,vx+vec3(0.0,+dY,+dZ));
+ vec4 xYZ = texture(intensityVol,vx+vec3(-dX,+dY,+dZ));
+ vec4 XOZ = texture(intensityVol,vx+vec3(+dX,0.0,+dZ));
+ vec4 OOZ = texture(intensityVol,vx+vec3(0.0,0.0,+dZ));
+ vec4 xOZ = texture(intensityVol,vx+vec3(-dX,0.0,+dZ));
+ vec4 XyZ = texture(intensityVol,vx+vec3(+dX,-dY,+dZ));
+ vec4 OyZ = texture(intensityVol,vx+vec3(0.0,-dY,+dZ));
+ vec4 xyZ = texture(intensityVol,vx+vec3(-dX,-dY,+dZ));
+
+ vec4 XYO = texture(intensityVol,vx+vec3(+dX,+dY,0.0));
+ vec4 OYO = texture(intensityVol,vx+vec3(0.0,+dY,0.0));
+ vec4 xYO = texture(intensityVol,vx+vec3(-dX,+dY,0.0));
+ vec4 XOO = texture(intensityVol,vx+vec3(+dX,0.0,0.0));
+ vec4 OOO = texture(intensityVol,vx+vec3(0.0,0.0,0.0));
+ vec4 xOO = texture(intensityVol,vx+vec3(-dX,0.0,0.0));
+ vec4 XyO = texture(intensityVol,vx+vec3(+dX,-dY,0.0));
+ vec4 OyO = texture(intensityVol,vx+vec3(0.0,-dY,0.0));
+ vec4 xyO = texture(intensityVol,vx+vec3(-dX,-dY,0.0));
+
+ vec4 XYz = texture(intensityVol,vx+vec3(+dX,+dY,-dZ));
+ vec4 OYz = texture(intensityVol,vx+vec3(0.0,+dY,-dZ));
+ vec4 xYz = texture(intensityVol,vx+vec3(-dX,+dY,-dZ));
+ vec4 XOz = texture(intensityVol,vx+vec3(+dX,0.0,-dZ));
+ vec4 OOz = texture(intensityVol,vx+vec3(0.0,0.0,-dZ));
+ vec4 xOz = texture(intensityVol,vx+vec3(-dX,0.0,-dZ));
+ vec4 Xyz = texture(intensityVol,vx+vec3(+dX,-dY,-dZ));
+ vec4 Oyz = texture(intensityVol,vx+vec3(0.0,-dY,-dZ));
+ vec4 xyz = texture(intensityVol,vx+vec3(-dX,-dY,-dZ));
+
+ vec4 blurred = vec4 (0.0, 0.0, 0.0, 0.0);
+ blurred.r = 2.0*(xOz.r +xOZ.r +xyO.r +xYO.r +xOO.r +XOz.r +XOZ.r +XyO.r +XYO.r +XOO.r) +xyz.r +xyZ.r +xYz.r +xYZ.r +Xyz.r +XyZ.r +XYz.r +XYZ.r;
+ blurred.g = 2.0*(Oyz.r +OyZ.r +xyO.r +XyO.r +OyO.r +OYz.r +OYZ.r +xYO.r +XYO.r +OYO.r) +xyz.r +Xyz.r +xyZ.r +XyZ.r +xYz.r +XYz.r +xYZ.r +XYZ.r;
+ blurred.b = 2.0*(Oyz.r +OYz.r +xOz.r +XOz.r +OOz.r +OyZ.r +OYZ.r +xOZ.r +XOZ.r +OOZ.r) +xyz.r +Xyz.r +xYz.r +XYz.r +xyZ.r +XyZ.r +XyZ.r +XYZ.r;
+ blurred.a = 0.32*(abs(blurred.r)+abs(blurred.g)+abs(blurred.b));
+ // 0.0357 = 1/28 to account for weights, rescale to 2**16,
+ FragColor = 0.0357*blurred;
+}`;
+var kGradientMagnitude = `
+  gradientSample.a = log2(gradientSample.r*gradientSample.r + gradientSample.g*gradientSample.g + gradientSample.b*gradientSample.b + 1.922337562475971e-06) + 18.988706873717717;
+`;
+var sobelFirstOrderFragShader = `#version 300 es
 #line 323
 precision highp int;
 precision highp float;
@@ -4608,10 +4688,53 @@ void main(void) {
   float BPR = texture(intensityVol,vx+vec3(-dX,-dY,+dZ)).r;
   float BPL = texture(intensityVol,vx+vec3(-dX,-dY,-dZ)).r;
   vec4 gradientSample = vec4 (0.0, 0.0, 0.0, 0.0);
-  gradientSample.r =   BAR+BAL+BPR+BPL -TAR-TAL-TPR-TPL;
-  gradientSample.g =  TPR+TPL+BPR+BPL -TAR-TAL-BAR-BAL;
-  gradientSample.b =  TAL+TPL+BAL+BPL -TAR-TPR-BAR-BPR;
-  gradientSample.a = (abs(gradientSample.r)+abs(gradientSample.g)+abs(gradientSample.b))*0.29;
+  gradientSample.r = BAR+BAL+BPR+BPL -TAR-TAL-TPR-TPL;
+  gradientSample.g = TPR+TPL+BPR+BPL -TAR-TAL-BAR-BAL;
+  gradientSample.b = TAL+TPL+BAL+BPL -TAR-TPR-BAR-BPR;
+${kGradientMagnitude}
+	// 0.04242020977371934 = 1/(log2(3*8) - log2(1/(255**2*8))) // 3*8 -> max for 1st order gradient
+	gradientSample.a *= 0.04242020977371934;
+  gradientSample.rgb = normalize(gradientSample.rgb);
+  gradientSample.rgb = (gradientSample.rgb * 0.5)+0.5;
+  FragColor = gradientSample;
+}`;
+var sobelSecondOrderFragShader = `#version 300 es
+#line 323
+precision highp int;
+precision highp float;
+in vec2 TexCoord;
+out vec4 FragColor;
+uniform float coordZ;
+uniform float dX;
+uniform float dY;
+uniform float dZ;
+uniform float dX2;
+uniform float dY2;
+uniform float dZ2;
+uniform highp sampler3D intensityVol;
+void main(void) {
+  vec3 vx = vec3(TexCoord.xy, coordZ);
+  //Neighboring voxels 'T'op/'B'ottom, 'A'nterior/'P'osterior, 'R'ight/'L'eft
+  vec4 TAR = texture(intensityVol,vx+vec3(+dX,+dY,+dZ));
+  vec4 TAL = texture(intensityVol,vx+vec3(+dX,+dY,-dZ));
+  vec4 TPR = texture(intensityVol,vx+vec3(+dX,-dY,+dZ));
+  vec4 TPL = texture(intensityVol,vx+vec3(+dX,-dY,-dZ));
+  vec4 BAR = texture(intensityVol,vx+vec3(-dX,+dY,+dZ));
+  vec4 BAL = texture(intensityVol,vx+vec3(-dX,+dY,-dZ));
+  vec4 BPR = texture(intensityVol,vx+vec3(-dX,-dY,+dZ));
+  vec4 BPL = texture(intensityVol,vx+vec3(-dX,-dY,-dZ));
+  vec4 T = texture(intensityVol,vx+vec3(+dX2,0.0,0.0));
+  vec4 A = texture(intensityVol,vx+vec3(0.0,+dY2,0.0));
+  vec4 R = texture(intensityVol,vx+vec3(0.0,0.0,+dZ2));
+  vec4 B = texture(intensityVol,vx+vec3(-dX2,0.0,0.0));
+  vec4 P = texture(intensityVol,vx+vec3(0.0,-dY2,0.0));
+  vec4 L = texture(intensityVol,vx+vec3(0.0,0.0,-dZ2));
+  vec4 gradientSample = vec4 (0.0, 0.0, 0.0, 0.0);
+  gradientSample.r = -4.0*B.r +8.0*(BAR.r+BAL.r+BPR.r+BPL.r) -8.0*(TAR.r+TAL.r+TPR.r+TPL.r) +4.0*T.r;
+  gradientSample.g = -4.0*P.g +8.0*(TPR.g+TPL.g+BPR.g+BPL.g) -8.0*(TAR.g+TAL.g+BAR.g+BAL.g) +4.0*A.g;
+  gradientSample.b = -4.0*L.b +8.0*(TAL.b+TPL.b+BAL.b+BPL.b) -8.0*(TAR.b+TPR.b+BAR.b+BPR.b) +4.0*R.b;
+${kGradientMagnitude}
+	gradientSample.a *= 0.0325;
   gradientSample.rgb = normalize(gradientSample.rgb);
   gradientSample.rgb =  (gradientSample.rgb * 0.5)+0.5;
   FragColor = gradientSample;
@@ -14609,7 +14732,7 @@ var NVUtilities = class _NVUtilities {
     const decompressed = await _NVUtilities.decompress(data);
     return decompressed.buffer.slice(decompressed.byteOffset, decompressed.byteOffset + decompressed.byteLength);
   }
-  static async readMatV4(buffer) {
+  static async readMatV4(buffer, isReplaceDots = false) {
     let len4 = buffer.byteLength;
     if (len4 < 40) {
       throw new Error("File too small to be MAT v4: bytes = " + buffer.byteLength);
@@ -14665,7 +14788,10 @@ var NVUtilities = class _NVUtilities {
         throw new Error("mrows * ncols must be greater than one");
       }
       const byteArray = new Uint8Array(bytes.subarray(pos, pos + namlen));
-      const tagName = textDecoder.decode(byteArray).trim().replaceAll("\0", "");
+      let tagName = textDecoder.decode(byteArray).trim().replaceAll("\0", "");
+      if (isReplaceDots) {
+        tagName = tagName.replaceAll(".", "_");
+      }
       const tagDataType = getTensDigit(mtype);
       let tagBytesPerItem = 8;
       if (tagDataType >= 1 && tagDataType <= 2) {
@@ -15751,7 +15877,11 @@ var NVMeshLoaders = class _NVMeshLoaders {
       return;
     }
     if (ext === "MZ3") {
-      layer.values = await _NVMeshLoaders.readMZ3(buffer, n_vert);
+      const obj = await _NVMeshLoaders.readMZ3(buffer, n_vert);
+      layer.values = obj.scalars;
+      if ("colormapLabel" in obj) {
+        layer.colormapLabel = obj.colormapLabel;
+      }
     } else if (ext === "ANNOT") {
       if (!isReadColortables) {
         layer.values = _NVMeshLoaders.readANNOT(buffer, n_vert);
@@ -16565,7 +16695,7 @@ var NVMeshLoaders = class _NVMeshLoaders {
       }
     }
     let scalars = new Float32Array();
-    if (!isRGBA && isSCALAR && NSCALAR > 0) {
+    if ((!isRGBA || n_vert > 0) && isSCALAR && NSCALAR > 0) {
       if (isDOUBLE) {
         const flt64 = new Float64Array(_buffer, filepos, NSCALAR * nvert);
         scalars = Float32Array.from(flt64);
@@ -16574,8 +16704,36 @@ var NVMeshLoaders = class _NVMeshLoaders {
       }
       filepos += bytesPerScalar * NSCALAR * nvert;
     }
+    if (n_vert > 0 && isRGBA && isSCALAR) {
+      let mx = scalars[0];
+      for (let i = 0; i < nvert; i++) {
+        mx = Math.max(mx, scalars[i]);
+      }
+      const Labels = { R: [], G: [], B: [], A: [], I: [], labels: [] };
+      for (let i = 0; i <= mx; i++) {
+        for (let v = 0; v < nvert; v++) {
+          if (i === scalars[v]) {
+            const v3 = v * 3;
+            Labels.I.push(i);
+            Labels.R.push(colors[v3] * 255);
+            Labels.G.push(colors[v3 + 1] * 255);
+            Labels.B.push(colors[v3 + 2] * 255);
+            Labels.A.push(255);
+            Labels.labels.push(`${i}`);
+            break;
+          }
+        }
+      }
+      const colormapLabel = cmapper.makeLabelLut(Labels);
+      return {
+        scalars,
+        colormapLabel
+      };
+    }
     if (n_vert > 0) {
-      return scalars;
+      return {
+        scalars
+      };
     }
     return {
       positions,
@@ -18382,6 +18540,12 @@ var deserializer = ($, _) => {
         return as(BigInt(value), index);
       case "BigInt":
         return as(Object(BigInt(value)), index);
+      case "ArrayBuffer":
+        return as(new Uint8Array(value).buffer, value);
+      case "DataView": {
+        const { buffer } = new Uint8Array(value);
+        return as(new DataView(buffer), value);
+      }
     }
     return as(new env[type](value), index);
   };
@@ -18411,6 +18575,8 @@ var typeOf = (value) => {
       return [MAP, EMPTY];
     case "Set":
       return [SET, EMPTY];
+    case "DataView":
+      return [ARRAY, asString];
   }
   if (asString.includes("Array"))
     return [ARRAY, asString];
@@ -18449,8 +18615,15 @@ var serializer = (strict, json, $, _) => {
         return as([TYPE, entry], value);
       }
       case ARRAY: {
-        if (type)
-          return as([type, [...value]], value);
+        if (type) {
+          let spread = value;
+          if (type === "DataView") {
+            spread = new Uint8Array(value.buffer);
+          } else if (type === "ArrayBuffer") {
+            spread = new Uint8Array(value);
+          }
+          return as([type, [...spread]], value);
+        }
         const arr = [];
         const index = as([TYPE, arr], value);
         for (const entry of value)
@@ -18889,9 +19062,76 @@ var zls = function(d, dict) {
     err(6, "invalid zlib data: " + (d[1] & 32 ? "need" : "unexpected") + " dictionary");
   return (d[1] >> 3 & 4) + 2;
 };
+var Inflate = /* @__PURE__ */ function() {
+  function Inflate2(opts, cb) {
+    if (typeof opts == "function")
+      cb = opts, opts = {};
+    this.ondata = cb;
+    var dict = opts && opts.dictionary && opts.dictionary.subarray(-32768);
+    this.s = { i: 0, b: dict ? dict.length : 0 };
+    this.o = new u8(32768);
+    this.p = new u8(0);
+    if (dict)
+      this.o.set(dict);
+  }
+  Inflate2.prototype.e = function(c) {
+    if (!this.ondata)
+      err(5);
+    if (this.d)
+      err(4);
+    if (!this.p.length)
+      this.p = c;
+    else if (c.length) {
+      var n = new u8(this.p.length + c.length);
+      n.set(this.p), n.set(c, this.p.length), this.p = n;
+    }
+  };
+  Inflate2.prototype.c = function(final) {
+    this.s.i = +(this.d = final || false);
+    var bts = this.s.b;
+    var dt = inflt(this.p, this.s, this.o);
+    this.ondata(slc(dt, bts, this.s.b), this.d);
+    this.o = slc(dt, this.s.b - 32768), this.s.b = this.o.length;
+    this.p = slc(this.p, this.s.p / 8 | 0), this.s.p &= 7;
+  };
+  Inflate2.prototype.push = function(chunk, final) {
+    this.e(chunk), this.c(final);
+  };
+  return Inflate2;
+}();
 function inflateSync(data, opts) {
   return inflt(data, { i: 2 }, opts && opts.out, opts && opts.dictionary);
 }
+var Gunzip = /* @__PURE__ */ function() {
+  function Gunzip2(opts, cb) {
+    this.v = 1;
+    this.r = 0;
+    Inflate.call(this, opts, cb);
+  }
+  Gunzip2.prototype.push = function(chunk, final) {
+    Inflate.prototype.e.call(this, chunk);
+    this.r += chunk.length;
+    if (this.v) {
+      var p = this.p.subarray(this.v - 1);
+      var s = p.length > 3 ? gzs(p) : 4;
+      if (s > p.length) {
+        if (!final)
+          return;
+      } else if (this.v > 1 && this.onmember) {
+        this.onmember(this.r - p.length);
+      }
+      this.p = p.subarray(s), this.v = 0;
+    }
+    Inflate.prototype.c.call(this, final);
+    if (this.s.f && !this.s.l && !final) {
+      this.v = shft(this.s.p) + 9;
+      this.s = { i: 0 };
+      this.o = new u8(0);
+      this.push(new u8(0), final);
+    }
+  };
+  return Gunzip2;
+}();
 function gunzipSync(data, opts) {
   var st = gzs(data);
   if (st + 8 > data.length)
@@ -20195,6 +20435,73 @@ async function decompressAsync(data) {
   await closePromise;
   return result;
 }
+async function decompressHeaderAsync(data, minOutputBytes = Infinity) {
+  const detectFormat = (data2) => {
+    if (data2[0] === 31 && data2[1] === 139 && data2[2] === 8)
+      return "gzip";
+    if (data2[0] === 120 && [1, 94, 156, 218].includes(data2[1]))
+      return "deflate";
+    return "deflate-raw";
+  };
+  const uint8Data = new Uint8Array(data);
+  const format = detectFormat(uint8Data);
+  const stream = new DecompressionStream(format);
+  const limitStream = new TransformStream({
+    transform(chunk, controller) {
+      controller.enqueue(chunk);
+    },
+    flush(controller) {
+      controller.terminate();
+    }
+  });
+  const { readable, writable } = stream;
+  const writer = writable.getWriter();
+  const limitedReader = readable.pipeThrough(limitStream).getReader();
+  writer.write(uint8Data).catch((err2) => {
+    if (!(err2 instanceof Error && err2.name === "AbortError")) {
+      console.error("Error during write:", err2);
+    }
+  });
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    while (totalBytes < minOutputBytes) {
+      const { done, value } = await limitedReader.read();
+      if (done)
+        break;
+      const remainingSpace = minOutputBytes - totalBytes;
+      const chunk = value.subarray(0, Math.min(value.length, remainingSpace));
+      chunks.push(chunk);
+      totalBytes += chunk.length;
+      if (totalBytes >= minOutputBytes) {
+        await Promise.all([
+          limitedReader.cancel().catch(() => {
+          }),
+          writer.abort().catch(() => {
+          })
+        ]);
+        break;
+      }
+    }
+  } catch (err2) {
+    if (!(err2 instanceof Error && err2.name === "AbortError")) {
+      console.error("Error during decompression:", err2);
+    }
+  } finally {
+    await Promise.allSettled([
+      limitedReader.cancel().catch(() => {
+      }),
+      writer.close().catch(() => {
+      })
+    ]);
+  }
+  return chunks.length === 1 ? chunks[0].buffer : chunks.reduce((acc, chunk) => {
+    const combined = new Uint8Array(acc.byteLength + chunk.byteLength);
+    combined.set(new Uint8Array(acc), 0);
+    combined.set(chunk, acc.byteLength);
+    return combined.buffer;
+  }, new ArrayBuffer(0));
+}
 function readHeader(data, isHdrImgPairOK = false) {
   let header = null;
   if (isCompressed(data)) {
@@ -20210,6 +20517,43 @@ function readHeader(data, isHdrImgPairOK = false) {
   } else {
     throw new Error("That file does not appear to be NIFTI!");
   }
+  return header;
+}
+async function readHeaderAsync(data, isHdrImgPairOK = false) {
+  if (!isCompressed(data)) {
+    return readHeader(data, isHdrImgPairOK);
+  }
+  let header = null;
+  let dat = await decompressHeaderAsync(data, 540);
+  let isLitteEndian = true;
+  let isVers1 = true;
+  var rawData = new DataView(dat);
+  const sigLittle = rawData.getInt32(0, true);
+  const sigBig = rawData.getInt32(0, false);
+  if (sigLittle === 348) {
+  } else if (sigBig === 348) {
+    isLitteEndian = false;
+  } else if (sigLittle === 540) {
+    isVers1 = false;
+  } else if (sigBig === 540) {
+    isVers1 = false;
+    isLitteEndian = false;
+  } else {
+    throw new Error("That file does not appear to be NIFTI!");
+  }
+  let vox_offset = Math.round(rawData.getFloat32(108, isLitteEndian));
+  if (NIFTI2) {
+    vox_offset = Utils.getUint64At(rawData, 168, isLitteEndian);
+  }
+  if (vox_offset > dat.byteLength) {
+    dat = await decompressHeaderAsync(data, vox_offset);
+  }
+  if (isVers1) {
+    header = new NIFTI1();
+  } else {
+    header = new NIFTI2();
+  }
+  header.readHeader(dat);
   return header;
 }
 function readImage(header, data) {
@@ -20251,6 +20595,9 @@ var ImageType = /* @__PURE__ */ ((ImageType3) => {
   ImageType3[ImageType3["SRC"] = 17] = "SRC";
   ImageType3[ImageType3["FIB"] = 18] = "FIB";
   ImageType3[ImageType3["BMP"] = 19] = "BMP";
+  ImageType3[ImageType3["ZARR"] = 20] = "ZARR";
+  ImageType3[ImageType3["NPY"] = 21] = "NPY";
+  ImageType3[ImageType3["NPZ"] = 22] = "NPZ";
   return ImageType3;
 })(ImageType || {});
 var NVIMAGE_TYPE = Object.freeze({
@@ -20265,6 +20612,9 @@ var NVIMAGE_TYPE = Object.freeze({
       case "TXT":
         imageType = 3 /* DCM_MANIFEST */;
         break;
+      case "FZ":
+      case "GQI":
+      case "QSDR":
       case "FIB":
         imageType = 18 /* FIB */;
         break;
@@ -20295,6 +20645,12 @@ var NVIMAGE_TYPE = Object.freeze({
       case "MGZ":
         imageType = 11 /* MGZ */;
         break;
+      case "NPY":
+        imageType = 21 /* NPY */;
+        break;
+      case "NPZ":
+        imageType = 22 /* NPZ */;
+        break;
       case "SRC":
         imageType = 17 /* SRC */;
         break;
@@ -20316,6 +20672,9 @@ var NVIMAGE_TYPE = Object.freeze({
       case "JPG":
       case "JPEG":
         imageType = 19 /* BMP */;
+        break;
+      case "ZARR":
+        imageType = 20 /* ZARR */;
         break;
     }
     return imageType;
@@ -20945,6 +21304,13 @@ var NVImage = class _NVImage {
     if (imageType === NVIMAGE_TYPE.UNKNOWN) {
       imageType = NVIMAGE_TYPE.parse(ext);
     }
+    if (dataBuffer instanceof ArrayBuffer && dataBuffer.byteLength >= 2 && imageType === NVIMAGE_TYPE.DCM) {
+      const u8s = new Uint8Array(dataBuffer);
+      const isNifti1 = u8s[0] === 92 && u8s[1] === 1 || u8s[1] === 92 && u8s[0] === 1;
+      if (isNifti1) {
+        imageType = NVIMAGE_TYPE.NII;
+      }
+    }
     newImg.imageType = imageType;
     switch (imageType) {
       case NVIMAGE_TYPE.DCM_FOLDER:
@@ -20989,8 +21355,19 @@ var NVImage = class _NVImage {
       case NVIMAGE_TYPE.BMP:
         imgRaw = await newImg.readBMP(dataBuffer);
         break;
+      case NVIMAGE_TYPE.NPY:
+        imgRaw = await newImg.readNPY(dataBuffer);
+        break;
+      case NVIMAGE_TYPE.NPZ:
+        imgRaw = await newImg.readNPZ(dataBuffer);
+        break;
+      case NVIMAGE_TYPE.ZARR:
+        throw new Error("Image type ZARR not (yet) supported");
       case NVIMAGE_TYPE.NII:
-        newImg.hdr = readHeader(dataBuffer);
+        if (isCompressed(dataBuffer)) {
+          dataBuffer = await decompressAsync(dataBuffer);
+        }
+        newImg.hdr = await readHeaderAsync(dataBuffer);
         if (newImg.hdr !== null) {
           if (newImg.hdr.cal_min === 0 && newImg.hdr.cal_max === 255) {
             newImg.hdr.cal_max = 0;
@@ -21547,6 +21924,103 @@ var NVImage = class _NVImage {
     return buffer.slice(6);
   }
   // readV16()
+  async readNPY(buffer) {
+    function getTypeSize(dtype2) {
+      const typeMap = {
+        "|b1": 1,
+        // Boolean
+        "<i1": 1,
+        // Int8
+        "<u1": 1,
+        // UInt8
+        "<i2": 2,
+        // Int16
+        "<u2": 2,
+        // UInt16
+        "<i4": 4,
+        // Int32
+        "<u4": 4,
+        // UInt32
+        "<f4": 4,
+        // Float32
+        "<f8": 8
+        // Float64
+      };
+      return typeMap[dtype2] ?? 1;
+    }
+    function getDataTypeCode(dtype2) {
+      const typeMap = {
+        "|b1": 2,
+        // DT_BINARY
+        "<i1": 256,
+        // DT_INT8
+        "<u1": 2,
+        // DT_UINT8
+        "<i2": 4,
+        // DT_INT16
+        "<u2": 512,
+        // DT_UINT16
+        "<i4": 8,
+        // DT_INT32
+        "<u4": 768,
+        // DT_UINT32
+        "<f4": 16,
+        // DT_FLOAT32
+        "<f8": 64
+        // DT_FLOAT64
+      };
+      return typeMap[dtype2] ?? 16;
+    }
+    const dv = new DataView(buffer);
+    const magicBytes = [dv.getUint8(0), dv.getUint8(1), dv.getUint8(2), dv.getUint8(3), dv.getUint8(4), dv.getUint8(5)];
+    const expectedMagic = [147, 78, 85, 77, 80, 89];
+    if (!magicBytes.every((byte, i) => byte === expectedMagic[i])) {
+      throw new Error("Not a valid NPY file: Magic number mismatch");
+    }
+    const _version = dv.getUint8(6);
+    const _minorVersion = dv.getUint8(7);
+    const headerLen = dv.getUint16(8, true);
+    const headerText = new TextDecoder("utf-8").decode(buffer.slice(10, 10 + headerLen));
+    const shapeMatch = headerText.match(/'shape': \((.*?)\)/);
+    if (!shapeMatch) {
+      throw new Error("Invalid NPY header: Shape not found");
+    }
+    const shape = shapeMatch[1].split(",").map((s) => s.trim()).filter((s) => s !== "").map(Number);
+    const dtypeMatch = headerText.match(/'descr': '([^']+)'/);
+    if (!dtypeMatch) {
+      throw new Error("Invalid NPY header: Data type not found");
+    }
+    const dtype = dtypeMatch[1];
+    const numElements = shape.reduce((a, b) => a * b, 1);
+    const dataStart = 10 + headerLen;
+    const dataBuffer = buffer.slice(dataStart, dataStart + numElements * getTypeSize(dtype));
+    const width = shape.length > 0 ? shape[shape.length - 1] : 1;
+    const height = shape.length > 1 ? shape[shape.length - 2] : 1;
+    const slices = shape.length > 2 ? shape[shape.length - 3] : 1;
+    this.hdr = new NIFTI1();
+    const hdr = this.hdr;
+    hdr.dims = [3, width, height, slices, 0, 0, 0, 0];
+    hdr.pixDims = [1, 1, 1, 1, 1, 0, 0, 0];
+    hdr.affine = [
+      [hdr.pixDims[1], 0, 0, -(hdr.dims[1] - 2) * 0.5 * hdr.pixDims[1]],
+      [0, -hdr.pixDims[2], 0, (hdr.dims[2] - 2) * 0.5 * hdr.pixDims[2]],
+      [0, 0, -hdr.pixDims[3], (hdr.dims[3] - 2) * 0.5 * hdr.pixDims[3]],
+      [0, 0, 0, 1]
+    ];
+    hdr.numBitsPerVoxel = getTypeSize(dtype) * 8;
+    hdr.datatypeCode = getDataTypeCode(dtype);
+    return dataBuffer;
+  }
+  async readNPZ(buffer) {
+    const zip = new Zip(buffer);
+    for (let i = 0; i < zip.entries.length; i++) {
+      const entry = zip.entries[i];
+      if (entry.fileName.toLowerCase().endsWith(".npy")) {
+        const data = await entry.extract();
+        return await this.readNPY(data.buffer);
+      }
+    }
+  }
   async imageDataFromArrayBuffer(buffer) {
     return new Promise((resolve, reject) => {
       const blob = new Blob([buffer]);
@@ -21576,20 +22050,34 @@ var NVImage = class _NVImage {
   async readBMP(buffer) {
     const imageData = await this.imageDataFromArrayBuffer(buffer);
     const { width, height, data } = imageData;
-    data.fill(255, 0, Math.floor(data.length / 2));
     this.hdr = new NIFTI1();
     const hdr = this.hdr;
     hdr.dims = [3, width, height, 1, 0, 0, 0, 0];
     hdr.pixDims = [1, 1, 1, 1, 1, 0, 0, 0];
     hdr.affine = [
-      [0, 0, -hdr.pixDims[1], (hdr.dims[1] - 2) * 0.5 * hdr.pixDims[1]],
-      [-hdr.pixDims[2], 0, 0, (hdr.dims[2] - 2) * 0.5 * hdr.pixDims[2]],
-      [0, -hdr.pixDims[3], 0, (hdr.dims[3] - 2) * 0.5 * hdr.pixDims[3]],
+      [hdr.pixDims[1], 0, 0, -(hdr.dims[1] - 2) * 0.5 * hdr.pixDims[1]],
+      [0, -hdr.pixDims[2], 0, (hdr.dims[2] - 2) * 0.5 * hdr.pixDims[2]],
+      [0, 0, -hdr.pixDims[3], (hdr.dims[3] - 2) * 0.5 * hdr.pixDims[3]],
       [0, 0, 0, 1]
     ];
     hdr.numBitsPerVoxel = 8;
     hdr.datatypeCode = 2304 /* DT_RGBA32 */;
-    return new Uint8Array(data);
+    let isGrayscale = true;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] !== data[i + 1] || data[i] !== data[i + 2]) {
+        isGrayscale = false;
+        break;
+      }
+    }
+    if (isGrayscale) {
+      hdr.datatypeCode = 2 /* DT_UINT8 */;
+      const grayscaleData = new Uint8Array(width * height);
+      for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+        grayscaleData[j] = data[i];
+      }
+      return grayscaleData.buffer;
+    }
+    return data.buffer;
   }
   // not included in public docs
   // read brainvoyager format VMR image
@@ -21757,11 +22245,11 @@ var NVImage = class _NVImage {
     hdr.littleEndian = false;
     hdr.dims = [3, 1, 1, 1, 0, 0, 0, 0];
     hdr.pixDims = [1, 1, 1, 1, 1, 0, 0, 0];
-    const mat = await NVUtilities.readMatV4(buffer);
+    const mat = await NVUtilities.readMatV4(buffer, true);
     if (!("dimension" in mat) || !("dti_fa" in mat)) {
       throw new Error("Not a valid DSIstudio FIB file");
     }
-    const hasV1 = "index0" in mat && "index1" in mat && "index2" in mat;
+    const hasV1 = "index0" in mat && "index1" in mat && "index2" in mat && "odf_vertices" in mat;
     hdr.numBitsPerVoxel = 32;
     hdr.datatypeCode = 16 /* DT_FLOAT32 */;
     hdr.dims[1] = mat.dimension[0];
@@ -21803,13 +22291,35 @@ var NVImage = class _NVImage {
       buff8v1.set(new Uint8Array(dir1.buffer, dir1.byteOffset, dir1.byteLength), 1 * nBytes3D);
       buff8v1.set(new Uint8Array(dir2.buffer, dir2.byteOffset, dir2.byteLength), 2 * nBytes3D);
     }
-    const buff8 = new Uint8Array(new ArrayBuffer(nBytes));
-    const arrFA = Float32Array.from(mat.dti_fa);
-    const imgFA = new Uint8Array(arrFA.buffer, arrFA.byteOffset, arrFA.byteLength);
-    buff8.set(imgFA, 0);
     if ("report" in mat) {
       hdr.description = new TextDecoder().decode(mat.report.subarray(0, Math.min(79, mat.report.byteLength)));
     }
+    const buff8 = new Uint8Array(new ArrayBuffer(nBytes));
+    const arrFA = Float32Array.from(mat.dti_fa);
+    if ("mask" in mat) {
+      console.log(mat);
+      let slope = 1;
+      if ("dti_fa_slope" in mat) {
+        slope = mat.dti_fa_slope[0];
+      }
+      let inter = 1;
+      if ("dti_fa_inter" in mat) {
+        inter = mat.dti_fa_inter[0];
+      }
+      const nvox = hdr.dims[1] * hdr.dims[2] * hdr.dims[3];
+      const mask = mat.mask;
+      const f32 = new Float32Array(nvox);
+      let j = 0;
+      for (let i = 0; i < nvox; i++) {
+        if (mask[i] !== 0) {
+          f32[i] = arrFA[j] * slope + inter;
+          j++;
+        }
+      }
+      return [f32.buffer, new Float32Array(buff8v1.buffer)];
+    }
+    const imgFA = new Uint8Array(arrFA.buffer, arrFA.byteOffset, arrFA.byteLength);
+    buff8.set(imgFA, 0);
     return [buff8.buffer, new Float32Array(buff8v1.buffer)];
   }
   // readFIB()
@@ -22904,7 +23414,7 @@ var NVImage = class _NVImage {
   }
   // Reorient raw header data to RAS
   // assume single volume, use nVolumes to specify, set nVolumes = 0 for same as input
-  hdr2RAS(nVolumes = 1) {
+  async hdr2RAS(nVolumes = 1) {
     if (!this.permRAS) {
       throw new Error("permRAS undefined");
     }
@@ -22912,7 +23422,7 @@ var NVImage = class _NVImage {
       throw new Error("hdr undefined");
     }
     const hdrBytes = hdrToArrayBuffer({ ...this.hdr, vox_offset: 352 }, false);
-    const hdr = readHeader(hdrBytes.buffer, true);
+    const hdr = await readHeaderAsync(hdrBytes.buffer, true);
     if (nVolumes === 1) {
       hdr.dims[0] = 3;
       hdr.dims[4] = 1;
@@ -23395,18 +23905,173 @@ var NVImage = class _NVImage {
     }
     return dataBuffer;
   }
-  static async fetchPartial(url, bytesToLoad, headers = {}) {
-    try {
-      const response = await fetch(url, {
-        headers: { range: `bytes=0-'${bytesToLoad}`, stream: "true", ...headers }
-      });
-      return response;
-    } catch (error) {
-      log.error(error);
-      log.error("fetchPartial failed, trying again without range header");
-      const response = await fetch(url, { headers });
-      return response;
+  static async readFirstDecompressedBytes(stream, minBytes) {
+    const reader = stream.getReader();
+    const gunzip = new Gunzip();
+    const decompressedChunks = [];
+    let totalDecompressed = 0;
+    let doneReading = false;
+    let resolveFn;
+    let rejectFn;
+    const promise = new Promise((resolve, reject) => {
+      resolveFn = resolve;
+      rejectFn = reject;
+      return void 0;
+    });
+    function finalize() {
+      const result = new Uint8Array(totalDecompressed);
+      let offset = 0;
+      for (const chunk of decompressedChunks) {
+        result.set(chunk, offset);
+        offset += chunk.length;
+      }
+      resolveFn(result);
     }
+    gunzip.ondata = (chunk) => {
+      decompressedChunks.push(chunk);
+      totalDecompressed += chunk.length;
+      if (totalDecompressed >= minBytes) {
+        doneReading = true;
+        reader.cancel().catch(() => {
+        });
+        finalize();
+      }
+    };
+    (async () => {
+      try {
+        while (!doneReading) {
+          const { done, value } = await reader.read();
+          if (done) {
+            doneReading = true;
+            gunzip.push(new Uint8Array(), true);
+            return;
+          }
+          gunzip.push(value, false);
+        }
+      } catch (err2) {
+        rejectFn(err2);
+      }
+    })().catch(() => {
+    });
+    return promise;
+  }
+  static extractFilenameFromUrl(url) {
+    const params = new URL(url).searchParams;
+    const contentDisposition = params.get("response-content-disposition");
+    if (contentDisposition) {
+      const match = contentDisposition.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/);
+      if (match) {
+        return decodeURIComponent(match[1]);
+      }
+    }
+    return url.split("/").pop().split("?")[0];
+  }
+  static async loadInitialVolumesGz(url = "", headers = {}, limitFrames4D = NaN) {
+    if (isNaN(limitFrames4D)) {
+      return null;
+    }
+    const response = await fetch(url, { headers, cache: "force-cache" });
+    let hdrBytes = 352;
+    let hdrU8s = await this.readFirstDecompressedBytes(response.body, hdrBytes);
+    const hdrView = new DataView(hdrU8s.buffer, hdrU8s.byteOffset, hdrU8s.byteLength);
+    const u162 = hdrView.getUint16(0, true);
+    const isNIfTI1 = u162 === 348;
+    const isNIfTI1be = u162 === 23553;
+    if (!isNIfTI1 && !isNIfTI1be) {
+      return null;
+    }
+    if (hdrU8s.length > 111) {
+      hdrBytes = hdrView.getFloat32(108, isNIfTI1);
+    }
+    if (hdrBytes > hdrU8s.length) {
+      hdrU8s = await this.readFirstDecompressedBytes(response.body, hdrBytes);
+    }
+    const isNifti1 = hdrU8s[0] === 92 && hdrU8s[1] === 1 || hdrU8s[1] === 92 && hdrU8s[0] === 1;
+    if (!isNifti1) {
+      return null;
+    }
+    const hdr = await readHeaderAsync(hdrU8s.buffer);
+    if (!hdr) {
+      throw new Error("Could not read NIfTI header");
+    }
+    const nBytesPerVoxel = hdr.numBitsPerVoxel / 8;
+    const nVox3D = [1, 2, 3].reduce((acc, i) => acc * (hdr.dims[i] > 1 ? hdr.dims[i] : 1), 1);
+    const nFrame4D = [4, 5, 6].reduce((acc, i) => acc * (hdr.dims[i] > 1 ? hdr.dims[i] : 1), 1);
+    const volsToLoad = Math.max(Math.min(limitFrames4D, nFrame4D), 1);
+    const bytesToLoad = hdr.vox_offset + volsToLoad * nVox3D * nBytesPerVoxel;
+    if (volsToLoad === nFrame4D) {
+      return null;
+    }
+    const responseImg = await fetch(url, { headers, cache: "force-cache" });
+    const dataBytes = await this.readFirstDecompressedBytes(responseImg.body, bytesToLoad);
+    return dataBytes.buffer.slice(0, bytesToLoad);
+  }
+  static async loadInitialVolumes(url = "", headers = {}, limitFrames4D = NaN) {
+    if (isNaN(limitFrames4D)) {
+      return null;
+    }
+    const response = await fetch(url, { headers, cache: "force-cache" });
+    const reader = response.body.getReader();
+    const { value, done } = await reader.read();
+    let hdrU8s = value;
+    if (done || !hdrU8s || hdrU8s.length < 2) {
+      throw new Error("Not enough data to determine compression");
+    }
+    const hdrView = new DataView(hdrU8s.buffer, hdrU8s.byteOffset, hdrU8s.byteLength);
+    const u162 = hdrView.getUint16(0, true);
+    const isGz = u162 === 35615;
+    if (isGz) {
+      await reader.cancel();
+      return this.loadInitialVolumesGz(url, headers, limitFrames4D);
+    }
+    const isNIfTI1 = u162 === 348;
+    const isNIfTI1be = u162 === 23553;
+    if (!isNIfTI1 && !isNIfTI1be) {
+      await reader.cancel();
+      return null;
+    }
+    let hdrBytes = 352;
+    if (hdrU8s.length > 111) {
+      hdrBytes = hdrView.getFloat32(108, isNIfTI1);
+    }
+    while (hdrU8s.length < hdrBytes) {
+      let concatU8s = function(arr1, arr2) {
+        const result = new Uint8Array(arr1.length + arr2.length);
+        result.set(arr1, 0);
+        result.set(arr2, arr1.length);
+        return result;
+      };
+      const { value: value2, done: done2 } = await reader.read();
+      if (done2 || !value2) {
+        break;
+      }
+      hdrU8s = concatU8s(hdrU8s, value2);
+    }
+    const hdr = await readHeaderAsync(hdrU8s.buffer);
+    if (!hdr) {
+      throw new Error("Could not read NIfTI header");
+    }
+    const nBytesPerVoxel = hdr.numBitsPerVoxel / 8;
+    const nVox3D = [1, 2, 3].reduce((acc, i) => acc * (hdr.dims[i] > 1 ? hdr.dims[i] : 1), 1);
+    const nFrame4D = [4, 5, 6].reduce((acc, i) => acc * (hdr.dims[i] > 1 ? hdr.dims[i] : 1), 1);
+    const volsToLoad = Math.max(Math.min(limitFrames4D, nFrame4D), 1);
+    const bytesToLoad = hdr.vox_offset + volsToLoad * nVox3D * nBytesPerVoxel;
+    const imgU8s = new Uint8Array(bytesToLoad);
+    const hdrCopyLength = Math.min(hdrU8s.length, bytesToLoad);
+    imgU8s.set(hdrU8s.subarray(0, hdrCopyLength), 0);
+    let bytesRead = hdrCopyLength;
+    while (bytesRead < bytesToLoad) {
+      const { value: value2, done: done2 } = await reader.read();
+      if (done2 || !value2) {
+        await reader.cancel();
+        return null;
+      }
+      const remaining = Math.min(value2.length, bytesToLoad - bytesRead);
+      imgU8s.set(value2.subarray(0, remaining), bytesRead);
+      bytesRead += remaining;
+    }
+    await reader.cancel();
+    return imgU8s.buffer;
   }
   /**
    * factory function to load and return a new NVImage instance from a given URL
@@ -23453,73 +24118,35 @@ var NVImage = class _NVImage {
         url = bytes[0] === 31 && bytes[1] === 139 ? "array.nii.gz" : "array.nii";
       }
     }
-    if (!isNaN(limitFrames4D)) {
-      try {
-        const response = await fetch(url, { headers });
-        if (!response.ok) {
-          throw new Error(response.statusText);
-        }
-        if (!response.body) {
-          throw new Error("No readable stream available");
-        }
-        const stream = await uncompressStream(response.body);
-        const reader = stream.getReader();
-        const headerChunks = [];
-        let headerBytes = 0;
-        while (headerBytes < 352) {
-          const { done, value } = await reader.read();
-          if (done) {
-            break;
-          }
-          headerChunks.push(value);
-          headerBytes += value.length;
-        }
-        const headerBuffer = new Uint8Array(headerBytes);
-        let offset = 0;
-        for (const chunk of headerChunks) {
-          headerBuffer.set(chunk, offset);
-          offset += chunk.length;
-        }
-        const isNifti1 = headerBuffer[0] === 92 && headerBuffer[1] === 1 || headerBuffer[1] === 92 && headerBuffer[0] === 1;
-        if (!isNifti1) {
-          reader.releaseLock();
-          return null;
-        }
-        const hdr = readHeader(headerBuffer.buffer);
-        if (!hdr) {
-          throw new Error("Could not read NIfTI header");
-        }
-        const nBytesPerVoxel = hdr.numBitsPerVoxel / 8;
-        const nVox3D = [1, 2, 3].reduce((acc, i) => acc * (hdr.dims[i] > 1 ? hdr.dims[i] : 1), 1);
-        const nFrame4D = [4, 5, 6].reduce((acc, i) => acc * (hdr.dims[i] > 1 ? hdr.dims[i] : 1), 1);
-        const volsToLoad = Math.max(Math.min(limitFrames4D, nFrame4D), 1);
-        const bytesToLoad = hdr.vox_offset + volsToLoad * nVox3D * nBytesPerVoxel;
-        const chunks = [...headerChunks];
-        let totalSize = headerBytes;
-        while (totalSize < bytesToLoad) {
-          const { done, value } = await reader.read();
-          if (done) {
-            break;
-          }
-          chunks.push(value);
-          totalSize += value.length;
-        }
-        reader.releaseLock();
-        dataBuffer = new ArrayBuffer(bytesToLoad);
-        const dataView = new Uint8Array(dataBuffer);
-        offset = 0;
-        for (const chunk of chunks) {
-          const bytesToCopy = Math.min(chunk.length, bytesToLoad - offset);
-          dataView.set(new Uint8Array(chunk.buffer, 0, bytesToCopy), offset);
-          offset += bytesToCopy;
-          if (offset >= bytesToLoad) {
-            break;
+    function getPrimaryExtension(filename) {
+      const match = filename.match(/\.([^.]+)(?:\.gz|\.bz2|\.xz)?$/);
+      return match ? match[1] : "";
+    }
+    let ext = "";
+    if (name === "") {
+      ext = getPrimaryExtension(url);
+    } else {
+      ext = getPrimaryExtension(name);
+    }
+    if (imageType === NVIMAGE_TYPE.UNKNOWN) {
+      imageType = NVIMAGE_TYPE.parse(ext);
+    }
+    if (imageType === NVIMAGE_TYPE.UNKNOWN && typeof url === "string") {
+      const response = await fetch(url, {});
+      if (response.redirected) {
+        const rname = this.extractFilenameFromUrl(response.url);
+        if (rname && rname.length > 0) {
+          if (name === "") {
+            name = rname;
+            ext = getPrimaryExtension(name);
+            imageType = NVIMAGE_TYPE.parse(ext);
           }
         }
-      } catch (error) {
-        console.error("Error loading limited frames:", error);
-        dataBuffer = null;
       }
+    }
+    const isTestNIfTI = imageType === NVIMAGE_TYPE.DCM || NVIMAGE_TYPE.NII;
+    if (!dataBuffer && isTestNIfTI) {
+      dataBuffer = await this.loadInitialVolumes(url, headers, limitFrames4D);
     }
     if (!dataBuffer) {
       if (isManifest) {
@@ -23552,13 +24179,6 @@ var NVImage = class _NVImage {
           offset += chunk.length;
         }
       }
-    }
-    const re = /(?:\.([^.]+))?$/;
-    let ext = "";
-    if (name === "") {
-      ext = re.exec(url)[1];
-    } else {
-      ext = re.exec(name)[1];
     }
     if (ext.toUpperCase() === "HEAD") {
       if (urlImgData === "") {
@@ -23709,7 +24329,7 @@ var NVImage = class _NVImage {
           if (!isNifti1) {
             dataBuffer = await this.readFileAsync(file);
           } else {
-            const hdr = readHeader(headerBuffer);
+            const hdr = await readHeaderAsync(headerBuffer);
             if (!hdr) {
               throw new Error("could not read nifti header");
             }
@@ -24527,9 +25147,9 @@ var DEFAULT_OPTIONS = {
   sagittalNoseLeft: false,
   isSliceMM: false,
   isV1SliceShader: false,
-  isHighResolutionCapable: true,
+  forceDevicePixelRatio: 0,
   logLevel: "info",
-  loadingText: "waiting for images...",
+  loadingText: "loading ...",
   isForceMouseClickToVoxelCenters: false,
   dragAndDropEnabled: true,
   drawingEnabled: false,
@@ -24584,7 +25204,9 @@ var DEFAULT_OPTIONS = {
   measureLineColor: [1, 0, 0, 1],
   // red
   measureTextHeight: 0.03,
-  isAlphaClipDark: false
+  isAlphaClipDark: false,
+  gradientOrder: 1,
+  gradientOpacity: 0
 };
 var INITIAL_SCENE_DATA = {
   gamma: 1,
@@ -26292,7 +26914,7 @@ var NVMesh3 = class _NVMesh {
       obj = await NVMeshLoaders.readGII(buffer);
     } else if (ext === "MZ3") {
       obj = await NVMeshLoaders.readMZ3(buffer);
-      if (obj instanceof Float32Array || obj.positions === null) {
+      if (!("positions" in obj)) {
         log.warn("MZ3 does not have positions (statistical overlay?)");
       }
     } else if (ext === "ASC") {
@@ -26348,7 +26970,7 @@ var NVMesh3 = class _NVMesh {
     if (obj instanceof Float32Array) {
       throw new Error("fatal: unknown mesh type loaded");
     }
-    if (!obj.positions) {
+    if (!("positions" in obj)) {
       throw new Error("positions not loaded");
     }
     if (!obj.indices) {
@@ -28585,6 +29207,32 @@ var NVConnectome = class _NVConnectome extends NVMesh3 {
 };
 
 // src/niivue/utils.ts
+function readFileAsDataURL(input) {
+  return new Promise((resolve, reject) => {
+    let filePromise;
+    if (input instanceof File) {
+      filePromise = Promise.resolve(input);
+    } else {
+      filePromise = new Promise((resolve2, reject2) => {
+        input.file(resolve2, reject2);
+      });
+    }
+    filePromise.then((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === "string") {
+          resolve(reader.result);
+        } else {
+          reject(new Error("Expected a string from FileReader.result"));
+        }
+      };
+      reader.onerror = () => {
+        reject(reader.error ?? new Error("Unknown FileReader error"));
+      };
+      reader.readAsDataURL(file);
+    }).catch((err2) => reject(err2));
+  });
+}
 function img2ras16(volume) {
   const dims = volume.hdr.dims;
   const perm = volume.permRAS;
@@ -28828,1560 +29476,6 @@ function intensityRaw2Scaled(hdr, raw) {
   return raw * hdr.scl_slope + hdr.scl_inter;
 }
 
-// ../../node_modules/tslib/tslib.es6.mjs
-var extendStatics = function(d, b) {
-  extendStatics = Object.setPrototypeOf || { __proto__: [] } instanceof Array && function(d2, b2) {
-    d2.__proto__ = b2;
-  } || function(d2, b2) {
-    for (var p in b2) if (Object.prototype.hasOwnProperty.call(b2, p)) d2[p] = b2[p];
-  };
-  return extendStatics(d, b);
-};
-function __extends(d, b) {
-  if (typeof b !== "function" && b !== null)
-    throw new TypeError("Class extends value " + String(b) + " is not a constructor or null");
-  extendStatics(d, b);
-  function __() {
-    this.constructor = d;
-  }
-  d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
-}
-var __assign = function() {
-  __assign = Object.assign || function __assign2(t) {
-    for (var s, i = 1, n = arguments.length; i < n; i++) {
-      s = arguments[i];
-      for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p)) t[p] = s[p];
-    }
-    return t;
-  };
-  return __assign.apply(this, arguments);
-};
-function __values(o) {
-  var s = typeof Symbol === "function" && Symbol.iterator, m = s && o[s], i = 0;
-  if (m) return m.call(o);
-  if (o && typeof o.length === "number") return {
-    next: function() {
-      if (o && i >= o.length) o = void 0;
-      return { value: o && o[i++], done: !o };
-    }
-  };
-  throw new TypeError(s ? "Object is not iterable." : "Symbol.iterator is not defined.");
-}
-function __read(o, n) {
-  var m = typeof Symbol === "function" && o[Symbol.iterator];
-  if (!m) return o;
-  var i = m.call(o), r, ar = [], e;
-  try {
-    while ((n === void 0 || n-- > 0) && !(r = i.next()).done) ar.push(r.value);
-  } catch (error) {
-    e = { error };
-  } finally {
-    try {
-      if (r && !r.done && (m = i["return"])) m.call(i);
-    } finally {
-      if (e) throw e.error;
-    }
-  }
-  return ar;
-}
-function __spreadArray(to, from, pack) {
-  if (pack || arguments.length === 2) for (var i = 0, l = from.length, ar; i < l; i++) {
-    if (ar || !(i in from)) {
-      if (!ar) ar = Array.prototype.slice.call(from, 0, i);
-      ar[i] = from[i];
-    }
-  }
-  return to.concat(ar || Array.prototype.slice.call(from));
-}
-
-// ../../node_modules/rxjs/dist/esm5/internal/util/isFunction.js
-function isFunction(value) {
-  return typeof value === "function";
-}
-
-// ../../node_modules/rxjs/dist/esm5/internal/util/createErrorClass.js
-function createErrorClass(createImpl) {
-  var _super = function(instance) {
-    Error.call(instance);
-    instance.stack = new Error().stack;
-  };
-  var ctorFunc = createImpl(_super);
-  ctorFunc.prototype = Object.create(Error.prototype);
-  ctorFunc.prototype.constructor = ctorFunc;
-  return ctorFunc;
-}
-
-// ../../node_modules/rxjs/dist/esm5/internal/util/UnsubscriptionError.js
-var UnsubscriptionError = createErrorClass(function(_super) {
-  return function UnsubscriptionErrorImpl(errors) {
-    _super(this);
-    this.message = errors ? errors.length + " errors occurred during unsubscription:\n" + errors.map(function(err2, i) {
-      return i + 1 + ") " + err2.toString();
-    }).join("\n  ") : "";
-    this.name = "UnsubscriptionError";
-    this.errors = errors;
-  };
-});
-
-// ../../node_modules/rxjs/dist/esm5/internal/util/arrRemove.js
-function arrRemove(arr, item) {
-  if (arr) {
-    var index = arr.indexOf(item);
-    0 <= index && arr.splice(index, 1);
-  }
-}
-
-// ../../node_modules/rxjs/dist/esm5/internal/Subscription.js
-var Subscription = function() {
-  function Subscription2(initialTeardown) {
-    this.initialTeardown = initialTeardown;
-    this.closed = false;
-    this._parentage = null;
-    this._finalizers = null;
-  }
-  Subscription2.prototype.unsubscribe = function() {
-    var e_1, _a2, e_2, _b2;
-    var errors;
-    if (!this.closed) {
-      this.closed = true;
-      var _parentage = this._parentage;
-      if (_parentage) {
-        this._parentage = null;
-        if (Array.isArray(_parentage)) {
-          try {
-            for (var _parentage_1 = __values(_parentage), _parentage_1_1 = _parentage_1.next(); !_parentage_1_1.done; _parentage_1_1 = _parentage_1.next()) {
-              var parent_1 = _parentage_1_1.value;
-              parent_1.remove(this);
-            }
-          } catch (e_1_1) {
-            e_1 = { error: e_1_1 };
-          } finally {
-            try {
-              if (_parentage_1_1 && !_parentage_1_1.done && (_a2 = _parentage_1.return)) _a2.call(_parentage_1);
-            } finally {
-              if (e_1) throw e_1.error;
-            }
-          }
-        } else {
-          _parentage.remove(this);
-        }
-      }
-      var initialFinalizer = this.initialTeardown;
-      if (isFunction(initialFinalizer)) {
-        try {
-          initialFinalizer();
-        } catch (e) {
-          errors = e instanceof UnsubscriptionError ? e.errors : [e];
-        }
-      }
-      var _finalizers = this._finalizers;
-      if (_finalizers) {
-        this._finalizers = null;
-        try {
-          for (var _finalizers_1 = __values(_finalizers), _finalizers_1_1 = _finalizers_1.next(); !_finalizers_1_1.done; _finalizers_1_1 = _finalizers_1.next()) {
-            var finalizer = _finalizers_1_1.value;
-            try {
-              execFinalizer(finalizer);
-            } catch (err2) {
-              errors = errors !== null && errors !== void 0 ? errors : [];
-              if (err2 instanceof UnsubscriptionError) {
-                errors = __spreadArray(__spreadArray([], __read(errors)), __read(err2.errors));
-              } else {
-                errors.push(err2);
-              }
-            }
-          }
-        } catch (e_2_1) {
-          e_2 = { error: e_2_1 };
-        } finally {
-          try {
-            if (_finalizers_1_1 && !_finalizers_1_1.done && (_b2 = _finalizers_1.return)) _b2.call(_finalizers_1);
-          } finally {
-            if (e_2) throw e_2.error;
-          }
-        }
-      }
-      if (errors) {
-        throw new UnsubscriptionError(errors);
-      }
-    }
-  };
-  Subscription2.prototype.add = function(teardown) {
-    var _a2;
-    if (teardown && teardown !== this) {
-      if (this.closed) {
-        execFinalizer(teardown);
-      } else {
-        if (teardown instanceof Subscription2) {
-          if (teardown.closed || teardown._hasParent(this)) {
-            return;
-          }
-          teardown._addParent(this);
-        }
-        (this._finalizers = (_a2 = this._finalizers) !== null && _a2 !== void 0 ? _a2 : []).push(teardown);
-      }
-    }
-  };
-  Subscription2.prototype._hasParent = function(parent) {
-    var _parentage = this._parentage;
-    return _parentage === parent || Array.isArray(_parentage) && _parentage.includes(parent);
-  };
-  Subscription2.prototype._addParent = function(parent) {
-    var _parentage = this._parentage;
-    this._parentage = Array.isArray(_parentage) ? (_parentage.push(parent), _parentage) : _parentage ? [_parentage, parent] : parent;
-  };
-  Subscription2.prototype._removeParent = function(parent) {
-    var _parentage = this._parentage;
-    if (_parentage === parent) {
-      this._parentage = null;
-    } else if (Array.isArray(_parentage)) {
-      arrRemove(_parentage, parent);
-    }
-  };
-  Subscription2.prototype.remove = function(teardown) {
-    var _finalizers = this._finalizers;
-    _finalizers && arrRemove(_finalizers, teardown);
-    if (teardown instanceof Subscription2) {
-      teardown._removeParent(this);
-    }
-  };
-  Subscription2.EMPTY = function() {
-    var empty = new Subscription2();
-    empty.closed = true;
-    return empty;
-  }();
-  return Subscription2;
-}();
-var EMPTY_SUBSCRIPTION = Subscription.EMPTY;
-function isSubscription(value) {
-  return value instanceof Subscription || value && "closed" in value && isFunction(value.remove) && isFunction(value.add) && isFunction(value.unsubscribe);
-}
-function execFinalizer(finalizer) {
-  if (isFunction(finalizer)) {
-    finalizer();
-  } else {
-    finalizer.unsubscribe();
-  }
-}
-
-// ../../node_modules/rxjs/dist/esm5/internal/config.js
-var config = {
-  onUnhandledError: null,
-  onStoppedNotification: null,
-  Promise: void 0,
-  useDeprecatedSynchronousErrorHandling: false,
-  useDeprecatedNextContext: false
-};
-
-// ../../node_modules/rxjs/dist/esm5/internal/scheduler/timeoutProvider.js
-var timeoutProvider = {
-  setTimeout: function(handler, timeout) {
-    var args = [];
-    for (var _i = 2; _i < arguments.length; _i++) {
-      args[_i - 2] = arguments[_i];
-    }
-    var delegate = timeoutProvider.delegate;
-    if (delegate === null || delegate === void 0 ? void 0 : delegate.setTimeout) {
-      return delegate.setTimeout.apply(delegate, __spreadArray([handler, timeout], __read(args)));
-    }
-    return setTimeout.apply(void 0, __spreadArray([handler, timeout], __read(args)));
-  },
-  clearTimeout: function(handle) {
-    var delegate = timeoutProvider.delegate;
-    return ((delegate === null || delegate === void 0 ? void 0 : delegate.clearTimeout) || clearTimeout)(handle);
-  },
-  delegate: void 0
-};
-
-// ../../node_modules/rxjs/dist/esm5/internal/util/reportUnhandledError.js
-function reportUnhandledError(err2) {
-  timeoutProvider.setTimeout(function() {
-    var onUnhandledError = config.onUnhandledError;
-    if (onUnhandledError) {
-      onUnhandledError(err2);
-    } else {
-      throw err2;
-    }
-  });
-}
-
-// ../../node_modules/rxjs/dist/esm5/internal/util/noop.js
-function noop() {
-}
-
-// ../../node_modules/rxjs/dist/esm5/internal/NotificationFactories.js
-var COMPLETE_NOTIFICATION = function() {
-  return createNotification("C", void 0, void 0);
-}();
-function errorNotification(error) {
-  return createNotification("E", void 0, error);
-}
-function nextNotification(value) {
-  return createNotification("N", value, void 0);
-}
-function createNotification(kind, value, error) {
-  return {
-    kind,
-    value,
-    error
-  };
-}
-
-// ../../node_modules/rxjs/dist/esm5/internal/util/errorContext.js
-var context = null;
-function errorContext(cb) {
-  if (config.useDeprecatedSynchronousErrorHandling) {
-    var isRoot = !context;
-    if (isRoot) {
-      context = { errorThrown: false, error: null };
-    }
-    cb();
-    if (isRoot) {
-      var _a2 = context, errorThrown = _a2.errorThrown, error = _a2.error;
-      context = null;
-      if (errorThrown) {
-        throw error;
-      }
-    }
-  } else {
-    cb();
-  }
-}
-function captureError(err2) {
-  if (config.useDeprecatedSynchronousErrorHandling && context) {
-    context.errorThrown = true;
-    context.error = err2;
-  }
-}
-
-// ../../node_modules/rxjs/dist/esm5/internal/Subscriber.js
-var Subscriber = function(_super) {
-  __extends(Subscriber2, _super);
-  function Subscriber2(destination) {
-    var _this = _super.call(this) || this;
-    _this.isStopped = false;
-    if (destination) {
-      _this.destination = destination;
-      if (isSubscription(destination)) {
-        destination.add(_this);
-      }
-    } else {
-      _this.destination = EMPTY_OBSERVER;
-    }
-    return _this;
-  }
-  Subscriber2.create = function(next, error, complete) {
-    return new SafeSubscriber(next, error, complete);
-  };
-  Subscriber2.prototype.next = function(value) {
-    if (this.isStopped) {
-      handleStoppedNotification(nextNotification(value), this);
-    } else {
-      this._next(value);
-    }
-  };
-  Subscriber2.prototype.error = function(err2) {
-    if (this.isStopped) {
-      handleStoppedNotification(errorNotification(err2), this);
-    } else {
-      this.isStopped = true;
-      this._error(err2);
-    }
-  };
-  Subscriber2.prototype.complete = function() {
-    if (this.isStopped) {
-      handleStoppedNotification(COMPLETE_NOTIFICATION, this);
-    } else {
-      this.isStopped = true;
-      this._complete();
-    }
-  };
-  Subscriber2.prototype.unsubscribe = function() {
-    if (!this.closed) {
-      this.isStopped = true;
-      _super.prototype.unsubscribe.call(this);
-      this.destination = null;
-    }
-  };
-  Subscriber2.prototype._next = function(value) {
-    this.destination.next(value);
-  };
-  Subscriber2.prototype._error = function(err2) {
-    try {
-      this.destination.error(err2);
-    } finally {
-      this.unsubscribe();
-    }
-  };
-  Subscriber2.prototype._complete = function() {
-    try {
-      this.destination.complete();
-    } finally {
-      this.unsubscribe();
-    }
-  };
-  return Subscriber2;
-}(Subscription);
-var _bind = Function.prototype.bind;
-function bind(fn, thisArg) {
-  return _bind.call(fn, thisArg);
-}
-var ConsumerObserver = function() {
-  function ConsumerObserver2(partialObserver) {
-    this.partialObserver = partialObserver;
-  }
-  ConsumerObserver2.prototype.next = function(value) {
-    var partialObserver = this.partialObserver;
-    if (partialObserver.next) {
-      try {
-        partialObserver.next(value);
-      } catch (error) {
-        handleUnhandledError(error);
-      }
-    }
-  };
-  ConsumerObserver2.prototype.error = function(err2) {
-    var partialObserver = this.partialObserver;
-    if (partialObserver.error) {
-      try {
-        partialObserver.error(err2);
-      } catch (error) {
-        handleUnhandledError(error);
-      }
-    } else {
-      handleUnhandledError(err2);
-    }
-  };
-  ConsumerObserver2.prototype.complete = function() {
-    var partialObserver = this.partialObserver;
-    if (partialObserver.complete) {
-      try {
-        partialObserver.complete();
-      } catch (error) {
-        handleUnhandledError(error);
-      }
-    }
-  };
-  return ConsumerObserver2;
-}();
-var SafeSubscriber = function(_super) {
-  __extends(SafeSubscriber2, _super);
-  function SafeSubscriber2(observerOrNext, error, complete) {
-    var _this = _super.call(this) || this;
-    var partialObserver;
-    if (isFunction(observerOrNext) || !observerOrNext) {
-      partialObserver = {
-        next: observerOrNext !== null && observerOrNext !== void 0 ? observerOrNext : void 0,
-        error: error !== null && error !== void 0 ? error : void 0,
-        complete: complete !== null && complete !== void 0 ? complete : void 0
-      };
-    } else {
-      var context_1;
-      if (_this && config.useDeprecatedNextContext) {
-        context_1 = Object.create(observerOrNext);
-        context_1.unsubscribe = function() {
-          return _this.unsubscribe();
-        };
-        partialObserver = {
-          next: observerOrNext.next && bind(observerOrNext.next, context_1),
-          error: observerOrNext.error && bind(observerOrNext.error, context_1),
-          complete: observerOrNext.complete && bind(observerOrNext.complete, context_1)
-        };
-      } else {
-        partialObserver = observerOrNext;
-      }
-    }
-    _this.destination = new ConsumerObserver(partialObserver);
-    return _this;
-  }
-  return SafeSubscriber2;
-}(Subscriber);
-function handleUnhandledError(error) {
-  if (config.useDeprecatedSynchronousErrorHandling) {
-    captureError(error);
-  } else {
-    reportUnhandledError(error);
-  }
-}
-function defaultErrorHandler(err2) {
-  throw err2;
-}
-function handleStoppedNotification(notification, subscriber) {
-  var onStoppedNotification = config.onStoppedNotification;
-  onStoppedNotification && timeoutProvider.setTimeout(function() {
-    return onStoppedNotification(notification, subscriber);
-  });
-}
-var EMPTY_OBSERVER = {
-  closed: true,
-  next: noop,
-  error: defaultErrorHandler,
-  complete: noop
-};
-
-// ../../node_modules/rxjs/dist/esm5/internal/symbol/observable.js
-var observable = function() {
-  return typeof Symbol === "function" && Symbol.observable || "@@observable";
-}();
-
-// ../../node_modules/rxjs/dist/esm5/internal/util/identity.js
-function identity3(x) {
-  return x;
-}
-
-// ../../node_modules/rxjs/dist/esm5/internal/util/pipe.js
-function pipeFromArray(fns) {
-  if (fns.length === 0) {
-    return identity3;
-  }
-  if (fns.length === 1) {
-    return fns[0];
-  }
-  return function piped(input) {
-    return fns.reduce(function(prev, fn) {
-      return fn(prev);
-    }, input);
-  };
-}
-
-// ../../node_modules/rxjs/dist/esm5/internal/Observable.js
-var Observable = function() {
-  function Observable2(subscribe) {
-    if (subscribe) {
-      this._subscribe = subscribe;
-    }
-  }
-  Observable2.prototype.lift = function(operator) {
-    var observable2 = new Observable2();
-    observable2.source = this;
-    observable2.operator = operator;
-    return observable2;
-  };
-  Observable2.prototype.subscribe = function(observerOrNext, error, complete) {
-    var _this = this;
-    var subscriber = isSubscriber(observerOrNext) ? observerOrNext : new SafeSubscriber(observerOrNext, error, complete);
-    errorContext(function() {
-      var _a2 = _this, operator = _a2.operator, source = _a2.source;
-      subscriber.add(operator ? operator.call(subscriber, source) : source ? _this._subscribe(subscriber) : _this._trySubscribe(subscriber));
-    });
-    return subscriber;
-  };
-  Observable2.prototype._trySubscribe = function(sink) {
-    try {
-      return this._subscribe(sink);
-    } catch (err2) {
-      sink.error(err2);
-    }
-  };
-  Observable2.prototype.forEach = function(next, promiseCtor) {
-    var _this = this;
-    promiseCtor = getPromiseCtor(promiseCtor);
-    return new promiseCtor(function(resolve, reject) {
-      var subscriber = new SafeSubscriber({
-        next: function(value) {
-          try {
-            next(value);
-          } catch (err2) {
-            reject(err2);
-            subscriber.unsubscribe();
-          }
-        },
-        error: reject,
-        complete: resolve
-      });
-      _this.subscribe(subscriber);
-    });
-  };
-  Observable2.prototype._subscribe = function(subscriber) {
-    var _a2;
-    return (_a2 = this.source) === null || _a2 === void 0 ? void 0 : _a2.subscribe(subscriber);
-  };
-  Observable2.prototype[observable] = function() {
-    return this;
-  };
-  Observable2.prototype.pipe = function() {
-    var operations = [];
-    for (var _i = 0; _i < arguments.length; _i++) {
-      operations[_i] = arguments[_i];
-    }
-    return pipeFromArray(operations)(this);
-  };
-  Observable2.prototype.toPromise = function(promiseCtor) {
-    var _this = this;
-    promiseCtor = getPromiseCtor(promiseCtor);
-    return new promiseCtor(function(resolve, reject) {
-      var value;
-      _this.subscribe(function(x) {
-        return value = x;
-      }, function(err2) {
-        return reject(err2);
-      }, function() {
-        return resolve(value);
-      });
-    });
-  };
-  Observable2.create = function(subscribe) {
-    return new Observable2(subscribe);
-  };
-  return Observable2;
-}();
-function getPromiseCtor(promiseCtor) {
-  var _a2;
-  return (_a2 = promiseCtor !== null && promiseCtor !== void 0 ? promiseCtor : config.Promise) !== null && _a2 !== void 0 ? _a2 : Promise;
-}
-function isObserver(value) {
-  return value && isFunction(value.next) && isFunction(value.error) && isFunction(value.complete);
-}
-function isSubscriber(value) {
-  return value && value instanceof Subscriber || isObserver(value) && isSubscription(value);
-}
-
-// ../../node_modules/rxjs/dist/esm5/internal/util/ObjectUnsubscribedError.js
-var ObjectUnsubscribedError = createErrorClass(function(_super) {
-  return function ObjectUnsubscribedErrorImpl() {
-    _super(this);
-    this.name = "ObjectUnsubscribedError";
-    this.message = "object unsubscribed";
-  };
-});
-
-// ../../node_modules/rxjs/dist/esm5/internal/Subject.js
-var Subject = function(_super) {
-  __extends(Subject2, _super);
-  function Subject2() {
-    var _this = _super.call(this) || this;
-    _this.closed = false;
-    _this.currentObservers = null;
-    _this.observers = [];
-    _this.isStopped = false;
-    _this.hasError = false;
-    _this.thrownError = null;
-    return _this;
-  }
-  Subject2.prototype.lift = function(operator) {
-    var subject = new AnonymousSubject(this, this);
-    subject.operator = operator;
-    return subject;
-  };
-  Subject2.prototype._throwIfClosed = function() {
-    if (this.closed) {
-      throw new ObjectUnsubscribedError();
-    }
-  };
-  Subject2.prototype.next = function(value) {
-    var _this = this;
-    errorContext(function() {
-      var e_1, _a2;
-      _this._throwIfClosed();
-      if (!_this.isStopped) {
-        if (!_this.currentObservers) {
-          _this.currentObservers = Array.from(_this.observers);
-        }
-        try {
-          for (var _b2 = __values(_this.currentObservers), _c = _b2.next(); !_c.done; _c = _b2.next()) {
-            var observer = _c.value;
-            observer.next(value);
-          }
-        } catch (e_1_1) {
-          e_1 = { error: e_1_1 };
-        } finally {
-          try {
-            if (_c && !_c.done && (_a2 = _b2.return)) _a2.call(_b2);
-          } finally {
-            if (e_1) throw e_1.error;
-          }
-        }
-      }
-    });
-  };
-  Subject2.prototype.error = function(err2) {
-    var _this = this;
-    errorContext(function() {
-      _this._throwIfClosed();
-      if (!_this.isStopped) {
-        _this.hasError = _this.isStopped = true;
-        _this.thrownError = err2;
-        var observers = _this.observers;
-        while (observers.length) {
-          observers.shift().error(err2);
-        }
-      }
-    });
-  };
-  Subject2.prototype.complete = function() {
-    var _this = this;
-    errorContext(function() {
-      _this._throwIfClosed();
-      if (!_this.isStopped) {
-        _this.isStopped = true;
-        var observers = _this.observers;
-        while (observers.length) {
-          observers.shift().complete();
-        }
-      }
-    });
-  };
-  Subject2.prototype.unsubscribe = function() {
-    this.isStopped = this.closed = true;
-    this.observers = this.currentObservers = null;
-  };
-  Object.defineProperty(Subject2.prototype, "observed", {
-    get: function() {
-      var _a2;
-      return ((_a2 = this.observers) === null || _a2 === void 0 ? void 0 : _a2.length) > 0;
-    },
-    enumerable: false,
-    configurable: true
-  });
-  Subject2.prototype._trySubscribe = function(subscriber) {
-    this._throwIfClosed();
-    return _super.prototype._trySubscribe.call(this, subscriber);
-  };
-  Subject2.prototype._subscribe = function(subscriber) {
-    this._throwIfClosed();
-    this._checkFinalizedStatuses(subscriber);
-    return this._innerSubscribe(subscriber);
-  };
-  Subject2.prototype._innerSubscribe = function(subscriber) {
-    var _this = this;
-    var _a2 = this, hasError = _a2.hasError, isStopped = _a2.isStopped, observers = _a2.observers;
-    if (hasError || isStopped) {
-      return EMPTY_SUBSCRIPTION;
-    }
-    this.currentObservers = null;
-    observers.push(subscriber);
-    return new Subscription(function() {
-      _this.currentObservers = null;
-      arrRemove(observers, subscriber);
-    });
-  };
-  Subject2.prototype._checkFinalizedStatuses = function(subscriber) {
-    var _a2 = this, hasError = _a2.hasError, thrownError = _a2.thrownError, isStopped = _a2.isStopped;
-    if (hasError) {
-      subscriber.error(thrownError);
-    } else if (isStopped) {
-      subscriber.complete();
-    }
-  };
-  Subject2.prototype.asObservable = function() {
-    var observable2 = new Observable();
-    observable2.source = this;
-    return observable2;
-  };
-  Subject2.create = function(destination, source) {
-    return new AnonymousSubject(destination, source);
-  };
-  return Subject2;
-}(Observable);
-var AnonymousSubject = function(_super) {
-  __extends(AnonymousSubject2, _super);
-  function AnonymousSubject2(destination, source) {
-    var _this = _super.call(this) || this;
-    _this.destination = destination;
-    _this.source = source;
-    return _this;
-  }
-  AnonymousSubject2.prototype.next = function(value) {
-    var _a2, _b2;
-    (_b2 = (_a2 = this.destination) === null || _a2 === void 0 ? void 0 : _a2.next) === null || _b2 === void 0 ? void 0 : _b2.call(_a2, value);
-  };
-  AnonymousSubject2.prototype.error = function(err2) {
-    var _a2, _b2;
-    (_b2 = (_a2 = this.destination) === null || _a2 === void 0 ? void 0 : _a2.error) === null || _b2 === void 0 ? void 0 : _b2.call(_a2, err2);
-  };
-  AnonymousSubject2.prototype.complete = function() {
-    var _a2, _b2;
-    (_b2 = (_a2 = this.destination) === null || _a2 === void 0 ? void 0 : _a2.complete) === null || _b2 === void 0 ? void 0 : _b2.call(_a2);
-  };
-  AnonymousSubject2.prototype._subscribe = function(subscriber) {
-    var _a2, _b2;
-    return (_b2 = (_a2 = this.source) === null || _a2 === void 0 ? void 0 : _a2.subscribe(subscriber)) !== null && _b2 !== void 0 ? _b2 : EMPTY_SUBSCRIPTION;
-  };
-  return AnonymousSubject2;
-}(Subject);
-
-// ../../node_modules/rxjs/dist/esm5/internal/scheduler/dateTimestampProvider.js
-var dateTimestampProvider = {
-  now: function() {
-    return (dateTimestampProvider.delegate || Date).now();
-  },
-  delegate: void 0
-};
-
-// ../../node_modules/rxjs/dist/esm5/internal/ReplaySubject.js
-var ReplaySubject = function(_super) {
-  __extends(ReplaySubject2, _super);
-  function ReplaySubject2(_bufferSize, _windowTime, _timestampProvider) {
-    if (_bufferSize === void 0) {
-      _bufferSize = Infinity;
-    }
-    if (_windowTime === void 0) {
-      _windowTime = Infinity;
-    }
-    if (_timestampProvider === void 0) {
-      _timestampProvider = dateTimestampProvider;
-    }
-    var _this = _super.call(this) || this;
-    _this._bufferSize = _bufferSize;
-    _this._windowTime = _windowTime;
-    _this._timestampProvider = _timestampProvider;
-    _this._buffer = [];
-    _this._infiniteTimeWindow = true;
-    _this._infiniteTimeWindow = _windowTime === Infinity;
-    _this._bufferSize = Math.max(1, _bufferSize);
-    _this._windowTime = Math.max(1, _windowTime);
-    return _this;
-  }
-  ReplaySubject2.prototype.next = function(value) {
-    var _a2 = this, isStopped = _a2.isStopped, _buffer = _a2._buffer, _infiniteTimeWindow = _a2._infiniteTimeWindow, _timestampProvider = _a2._timestampProvider, _windowTime = _a2._windowTime;
-    if (!isStopped) {
-      _buffer.push(value);
-      !_infiniteTimeWindow && _buffer.push(_timestampProvider.now() + _windowTime);
-    }
-    this._trimBuffer();
-    _super.prototype.next.call(this, value);
-  };
-  ReplaySubject2.prototype._subscribe = function(subscriber) {
-    this._throwIfClosed();
-    this._trimBuffer();
-    var subscription = this._innerSubscribe(subscriber);
-    var _a2 = this, _infiniteTimeWindow = _a2._infiniteTimeWindow, _buffer = _a2._buffer;
-    var copy6 = _buffer.slice();
-    for (var i = 0; i < copy6.length && !subscriber.closed; i += _infiniteTimeWindow ? 1 : 2) {
-      subscriber.next(copy6[i]);
-    }
-    this._checkFinalizedStatuses(subscriber);
-    return subscription;
-  };
-  ReplaySubject2.prototype._trimBuffer = function() {
-    var _a2 = this, _bufferSize = _a2._bufferSize, _timestampProvider = _a2._timestampProvider, _buffer = _a2._buffer, _infiniteTimeWindow = _a2._infiniteTimeWindow;
-    var adjustedBufferSize = (_infiniteTimeWindow ? 1 : 2) * _bufferSize;
-    _bufferSize < Infinity && adjustedBufferSize < _buffer.length && _buffer.splice(0, _buffer.length - adjustedBufferSize);
-    if (!_infiniteTimeWindow) {
-      var now = _timestampProvider.now();
-      var last = 0;
-      for (var i = 1; i < _buffer.length && _buffer[i] <= now; i += 2) {
-        last = i;
-      }
-      last && _buffer.splice(0, last + 1);
-    }
-  };
-  return ReplaySubject2;
-}(Subject);
-
-// ../../node_modules/rxjs/dist/esm5/internal/observable/dom/WebSocketSubject.js
-var DEFAULT_WEBSOCKET_CONFIG = {
-  url: "",
-  deserializer: function(e) {
-    return JSON.parse(e.data);
-  },
-  serializer: function(value) {
-    return JSON.stringify(value);
-  }
-};
-var WEBSOCKETSUBJECT_INVALID_ERROR_OBJECT = "WebSocketSubject.error must be called with an object with an error code, and an optional reason: { code: number, reason: string }";
-var WebSocketSubject = function(_super) {
-  __extends(WebSocketSubject3, _super);
-  function WebSocketSubject3(urlConfigOrSource, destination) {
-    var _this = _super.call(this) || this;
-    _this._socket = null;
-    if (urlConfigOrSource instanceof Observable) {
-      _this.destination = destination;
-      _this.source = urlConfigOrSource;
-    } else {
-      var config2 = _this._config = __assign({}, DEFAULT_WEBSOCKET_CONFIG);
-      _this._output = new Subject();
-      if (typeof urlConfigOrSource === "string") {
-        config2.url = urlConfigOrSource;
-      } else {
-        for (var key in urlConfigOrSource) {
-          if (urlConfigOrSource.hasOwnProperty(key)) {
-            config2[key] = urlConfigOrSource[key];
-          }
-        }
-      }
-      if (!config2.WebSocketCtor && WebSocket) {
-        config2.WebSocketCtor = WebSocket;
-      } else if (!config2.WebSocketCtor) {
-        throw new Error("no WebSocket constructor can be found");
-      }
-      _this.destination = new ReplaySubject();
-    }
-    return _this;
-  }
-  WebSocketSubject3.prototype.lift = function(operator) {
-    var sock = new WebSocketSubject3(this._config, this.destination);
-    sock.operator = operator;
-    sock.source = this;
-    return sock;
-  };
-  WebSocketSubject3.prototype._resetState = function() {
-    this._socket = null;
-    if (!this.source) {
-      this.destination = new ReplaySubject();
-    }
-    this._output = new Subject();
-  };
-  WebSocketSubject3.prototype.multiplex = function(subMsg, unsubMsg, messageFilter) {
-    var self2 = this;
-    return new Observable(function(observer) {
-      try {
-        self2.next(subMsg());
-      } catch (err2) {
-        observer.error(err2);
-      }
-      var subscription = self2.subscribe({
-        next: function(x) {
-          try {
-            if (messageFilter(x)) {
-              observer.next(x);
-            }
-          } catch (err2) {
-            observer.error(err2);
-          }
-        },
-        error: function(err2) {
-          return observer.error(err2);
-        },
-        complete: function() {
-          return observer.complete();
-        }
-      });
-      return function() {
-        try {
-          self2.next(unsubMsg());
-        } catch (err2) {
-          observer.error(err2);
-        }
-        subscription.unsubscribe();
-      };
-    });
-  };
-  WebSocketSubject3.prototype._connectSocket = function() {
-    var _this = this;
-    var _a2 = this._config, WebSocketCtor = _a2.WebSocketCtor, protocol = _a2.protocol, url = _a2.url, binaryType = _a2.binaryType;
-    var observer = this._output;
-    var socket = null;
-    try {
-      socket = protocol ? new WebSocketCtor(url, protocol) : new WebSocketCtor(url);
-      this._socket = socket;
-      if (binaryType) {
-        this._socket.binaryType = binaryType;
-      }
-    } catch (e) {
-      observer.error(e);
-      return;
-    }
-    var subscription = new Subscription(function() {
-      _this._socket = null;
-      if (socket && socket.readyState === 1) {
-        socket.close();
-      }
-    });
-    socket.onopen = function(evt) {
-      var _socket = _this._socket;
-      if (!_socket) {
-        socket.close();
-        _this._resetState();
-        return;
-      }
-      var openObserver = _this._config.openObserver;
-      if (openObserver) {
-        openObserver.next(evt);
-      }
-      var queue = _this.destination;
-      _this.destination = Subscriber.create(function(x) {
-        if (socket.readyState === 1) {
-          try {
-            var serializer2 = _this._config.serializer;
-            socket.send(serializer2(x));
-          } catch (e) {
-            _this.destination.error(e);
-          }
-        }
-      }, function(err2) {
-        var closingObserver = _this._config.closingObserver;
-        if (closingObserver) {
-          closingObserver.next(void 0);
-        }
-        if (err2 && err2.code) {
-          socket.close(err2.code, err2.reason);
-        } else {
-          observer.error(new TypeError(WEBSOCKETSUBJECT_INVALID_ERROR_OBJECT));
-        }
-        _this._resetState();
-      }, function() {
-        var closingObserver = _this._config.closingObserver;
-        if (closingObserver) {
-          closingObserver.next(void 0);
-        }
-        socket.close();
-        _this._resetState();
-      });
-      if (queue && queue instanceof ReplaySubject) {
-        subscription.add(queue.subscribe(_this.destination));
-      }
-    };
-    socket.onerror = function(e) {
-      _this._resetState();
-      observer.error(e);
-    };
-    socket.onclose = function(e) {
-      if (socket === _this._socket) {
-        _this._resetState();
-      }
-      var closeObserver = _this._config.closeObserver;
-      if (closeObserver) {
-        closeObserver.next(e);
-      }
-      if (e.wasClean) {
-        observer.complete();
-      } else {
-        observer.error(e);
-      }
-    };
-    socket.onmessage = function(e) {
-      try {
-        var deserializer2 = _this._config.deserializer;
-        observer.next(deserializer2(e));
-      } catch (err2) {
-        observer.error(err2);
-      }
-    };
-  };
-  WebSocketSubject3.prototype._subscribe = function(subscriber) {
-    var _this = this;
-    var source = this.source;
-    if (source) {
-      return source.subscribe(subscriber);
-    }
-    if (!this._socket) {
-      this._connectSocket();
-    }
-    this._output.subscribe(subscriber);
-    subscriber.add(function() {
-      var _socket = _this._socket;
-      if (_this._output.observers.length === 0) {
-        if (_socket && (_socket.readyState === 1 || _socket.readyState === 0)) {
-          _socket.close();
-        }
-        _this._resetState();
-      }
-    });
-    return subscriber;
-  };
-  WebSocketSubject3.prototype.unsubscribe = function() {
-    var _socket = this._socket;
-    if (_socket && (_socket.readyState === 1 || _socket.readyState === 0)) {
-      _socket.close();
-    }
-    this._resetState();
-    _super.prototype.unsubscribe.call(this);
-  };
-  return WebSocketSubject3;
-}(AnonymousSubject);
-
-// ../../node_modules/rxjs/dist/esm5/internal/observable/dom/webSocket.js
-function webSocket(urlConfigOrSource) {
-  return new WebSocketSubject(urlConfigOrSource);
-}
-
-// src/session-bus.ts
-var SessionUser = class {
-  constructor(displayName, userId, userKey, userProperties) {
-    __publicField(this, "id");
-    __publicField(this, "displayName");
-    __publicField(this, "key");
-    __publicField(this, "properties");
-    this.id = userId || v4();
-    this.displayName = displayName || `user-${this.id}`;
-    this.key = userKey || v4();
-    this.properties = userProperties || /* @__PURE__ */ new Map();
-  }
-};
-function storageAvailable(type) {
-  const storage = window[type];
-  const test = "test";
-  try {
-    storage.setItem(test, test);
-    storage.removeItem(test);
-    return true;
-  } catch (e) {
-    return false;
-  }
-}
-var SessionBus = class {
-  constructor(name, user, onMessageCallback, serverURL = "", sessionKey = "") {
-    __publicField(this, "userList");
-    __publicField(this, "user");
-    __publicField(this, "userQueueName");
-    __publicField(this, "userListName");
-    __publicField(this, "onMessageCallback");
-    __publicField(this, "isConnectedToServer", false);
-    __publicField(this, "isController", false);
-    __publicField(this, "sessionScene", {});
-    __publicField(this, "sessionKey");
-    __publicField(this, "sessionName");
-    __publicField(this, "sessionSceneName");
-    __publicField(this, "serverConnection$", null);
-    this.userList = [];
-    this.user = user || new SessionUser("anonymous");
-    this.onMessageCallback = onMessageCallback;
-    this.sessionScene = {};
-    this.sessionKey = sessionKey || v4();
-    this.sessionName = name;
-    this.sessionSceneName = `session-${name}-scene`;
-    if (serverURL) {
-      this.connectToServer(serverURL, name);
-      this.subscribeToServer();
-      this.isConnectedToServer = true;
-      if (this.serverConnection$ !== null) {
-        this.serverConnection$.next({
-          op: "create" /* CREATE */,
-          key: this.sessionKey
-        });
-      }
-    } else {
-      if (!storageAvailable("localStorage")) {
-        throw new Error("Local storage unavailable");
-      }
-      this.userQueueName = `user-${this.user.id}-q`;
-      this.userListName = `${name}-user-list`;
-      this.userList = JSON.parse(localStorage.getItem(this.userListName) || "[]");
-      this.userList.push(this.user);
-      localStorage.setItem(this.userListName, JSON.stringify(this.userList));
-      localStorage.setItem(this.userQueueName, JSON.stringify([]));
-      window.addEventListener("storage", this.localStorageEventListener.bind(this));
-    }
-  }
-  sendSessionMessage(message) {
-    message.from = this.user.id;
-    if (this.isConnectedToServer && this.serverConnection$ !== null) {
-      this.serverConnection$.next({
-        ...message,
-        key: this.sessionKey,
-        userKey: this.user.key
-      });
-    } else {
-      this.sendLocalMessage(message);
-    }
-  }
-  // Remote
-  // not included in public docs
-  // Internal function to connect to web socket server
-  connectToServer(serverURL, sessionName) {
-    const url = new URL(serverURL);
-    url.pathname = "websockets";
-    url.search = "?session=" + sessionName;
-    this.serverConnection$ = webSocket(url.href);
-    log.debug(url.href);
-  }
-  // Internal function called after a connection with the server has been made
-  subscribeToServer() {
-    if (this.serverConnection$ !== null) {
-      this.serverConnection$.subscribe({
-        next: (msg) => {
-          this.onMessageCallback(msg);
-        },
-        // Called whenever there is a message from the server.
-        error: (err2) => log.error(err2),
-        // Called if at any point WebSocket API signals some kind of error.
-        complete: () => log.debug("complete")
-        // Called when connection is closed (for whatever reason).
-      });
-    }
-  }
-  sendLocalMessage(message) {
-    for (const user of this.userList) {
-      if (user.id === this.user.id) {
-        continue;
-      }
-      const userQueueName = `user-${user.id}-q`;
-      const userQueueText = localStorage.getItem(userQueueName);
-      const userQueue = userQueueText ? JSON.parse(userQueueText) : [];
-      userQueue.push(message);
-      localStorage.setItem(userQueueName, JSON.stringify(userQueue));
-    }
-  }
-  localStorageEventListener(e) {
-    if (!e.newValue) {
-      return;
-    }
-    switch (e.key) {
-      case this.userListName:
-        {
-          const newUserList = JSON.parse(e.newValue);
-          const oldUserList = JSON.parse(e.oldValue ?? "[]");
-          this.userList = newUserList;
-          const newUsers = newUserList.filter((u) => !oldUserList.map((o) => o.id).includes(u.id));
-          for (const newUser of newUsers) {
-            this.onMessageCallback({
-              op: "user joined" /* USER_JOINED */,
-              user: newUser
-            });
-          }
-        }
-        break;
-      case this.userQueueName:
-        {
-          const messages = JSON.parse(e.newValue);
-          for (const message of messages) {
-            if (this.onMessageCallback) {
-              this.onMessageCallback(message);
-            }
-          }
-          localStorage.setItem(this.userQueueName ?? "", JSON.stringify([]));
-        }
-        break;
-    }
-  }
-};
-
-// src/nvcontroller.ts
-var NVController = class {
-  /**
-   * @param niivue - niivue object to control
-   */
-  constructor(niivue) {
-    __publicField(this, "niivue");
-    __publicField(this, "mediaUrlMap");
-    __publicField(this, "isInSession", false);
-    __publicField(this, "user");
-    __publicField(this, "sessionBus");
-    // events for external consumers
-    __publicField(this, "onFrameChange", (_volume, _index2) => {
-    });
-    this.niivue = niivue;
-    this.mediaUrlMap = /* @__PURE__ */ new Map();
-    this.niivue.onLocationChange = this.onLocationChangeHandler.bind(this);
-    this.niivue.onZoom3DChange = this.onZoom3DChangeHandler.bind(this);
-    this.niivue.scene.onAzimuthElevationChange = this.onAzimuthElevationChangeHandler.bind(this);
-    this.niivue.onClipPlaneChange = this.onClipPlaneChangeHandler.bind(this);
-    this.niivue.onVolumeAddedFromUrl = this.onVolumeAddedFromUrlHandler.bind(this);
-    this.niivue.onVolumeWithUrlRemoved = this.onVolumeWithUrlRemovedHandler.bind(this);
-    this.niivue.onMeshAddedFromUrl = this.onMeshAddedFromUrlHandler.bind(this);
-    this.niivue.onMeshWithUrlRemoved = this.onMeshWithUrlRemovedHandler.bind(this);
-    this.niivue.onCustomMeshShaderAdded = this.onCustomMeshShaderAddedHandler.bind(this);
-    this.niivue.onMeshShaderChanged = this.onMeshShaderChanged.bind(this);
-    this.niivue.onMeshPropertyChanged = this.onMeshPropertyChanged.bind(this);
-    this.niivue.onFrameChange = this.onFrameChangeHandler.bind(this);
-    for (const volume of this.niivue.volumes) {
-      volume.onColormapChange = this.onColormapChangeHandler.bind(this);
-      volume.onOpacityChange = this.onOpacityChangeHandler.bind(this);
-    }
-  }
-  // TODO location type
-  onLocationChangeHandler(location) {
-    log.debug(location);
-  }
-  addVolume(volume, url) {
-    this.niivue.volumes.push(volume);
-    const idx = this.niivue.volumes.length === 1 ? 0 : this.niivue.volumes.length - 1;
-    this.niivue.setVolume(volume, idx);
-    this.niivue.mediaUrlMap.set(volume, url);
-  }
-  addMesh(mesh, url) {
-    this.niivue.meshes.push(mesh);
-    const idx = this.niivue.meshes.length === 1 ? 0 : this.niivue.meshes.length - 1;
-    this.niivue.setMesh(mesh, idx);
-    this.niivue.mediaUrlMap.set(mesh, url);
-  }
-  onNewMessage(msg) {
-    switch (msg.op) {
-      case 1 /* ZOOM */:
-        this.niivue.volScaleMultiplier = msg.zoom;
-        break;
-      case 2 /* CLIP_PLANE */:
-        this.niivue.scene.clipPlane = msg.clipPlane;
-        break;
-      case 3 /* AZIMUTH_ELEVATION */:
-        this.niivue.scene._elevation = msg.elevation;
-        this.niivue.scene._azimuth = msg.azimuth;
-        break;
-      case 4 /* FRAME_CHANGED */:
-        {
-          const volume = this.niivue.getMediaByUrl(msg.url);
-          if (volume) {
-            volume.frame4D = msg.index;
-          }
-        }
-        break;
-      case 5 /* VOLUME_ADDED_FROM_URL */:
-        if (!this.niivue.getMediaByUrl(msg.imageOptions.url)) {
-          NVImage.loadFromUrl(msg.imageOptions).then((volume) => {
-            if (volume) {
-              this.addVolume(volume, msg.imageOptions.url);
-            }
-          }).catch((e) => {
-            if (e) {
-              throw e;
-            }
-          });
-        }
-        break;
-      case 6 /* VOLUME_WITH_URL_REMOVED */:
-        {
-          const volume = this.niivue.getMediaByUrl(msg.url);
-          if (volume) {
-            this.niivue.setVolume(volume, -1);
-            this.niivue.mediaUrlMap.delete(volume);
-          }
-        }
-        break;
-      case 7 /* COLORMAP_CHANGED */:
-        {
-          const volume = this.niivue.getMediaByUrl(msg.url);
-          volume._colormap = msg.colormap;
-          this.niivue.updateGLVolume();
-        }
-        break;
-      case 8 /* OPACITY_CHANGED */:
-        {
-          const volume = this.niivue.getMediaByUrl(msg.url);
-          volume._opacity = msg.opacity;
-          this.niivue.updateGLVolume();
-        }
-        break;
-      case 9 /* MESH_FROM_URL_ADDED */:
-        if (!this.niivue.getMediaByUrl(msg.meshOptions.url)) {
-          msg.meshOptions.gl = this.niivue.gl;
-          NVMesh3.loadFromUrl(msg.meshOptions).then((mesh) => {
-            this.addMesh(mesh, msg.meshOptions.url);
-          }).catch((e) => {
-            if (e) {
-              throw e;
-            }
-          });
-        }
-        break;
-      case 10 /* MESH_WITH_URL_REMOVED */:
-        {
-          const mesh = this.niivue.getMediaByUrl(msg.url);
-          if (mesh) {
-            this.niivue.setMesh(mesh, -1);
-            this.niivue.mediaUrlMap.delete(mesh);
-          }
-        }
-        break;
-      case 11 /* CUSTOM_SHADER_ADDED */:
-        {
-          const shader = this.niivue.createCustomMeshShader(msg.fragmentShaderText, msg.name);
-          this.niivue.meshShaders.push(shader);
-        }
-        break;
-      case 12 /* SHADER_CHANGED */:
-        this.niivue.meshes[msg.meshIndex].meshShaderIndex = msg.shaderIndex;
-        this.niivue.updateGLVolume();
-        break;
-      case 13 /* MESH_PROPERTY_CHANGED */:
-        this.niivue.meshes[msg.meshIndex].setProperty(msg.key, msg.val, this.niivue.gl);
-        break;
-    }
-    this.niivue.drawScene();
-  }
-  /**
-   * Connects to existing session or creates new session
-   */
-  connectToSession(sessionName, user, serverBaseUrl, sessionKey) {
-    this.user = user || new SessionUser();
-    this.sessionBus = new SessionBus(sessionName, this.user, this.onNewMessage.bind(this), serverBaseUrl, sessionKey);
-    this.isInSession = true;
-  }
-  /**
-   * Zoom level has changed
-   */
-  onZoom3DChangeHandler(zoom) {
-    if (this.isInSession && this.sessionBus) {
-      this.sessionBus.sendSessionMessage({
-        op: 1 /* ZOOM */,
-        zoom
-      });
-    }
-  }
-  /**
-   * Azimuth and/or elevation has changed
-   */
-  onAzimuthElevationChangeHandler(azimuth, elevation) {
-    if (this.isInSession && this.sessionBus) {
-      this.sessionBus.sendSessionMessage({
-        op: 3 /* AZIMUTH_ELEVATION */,
-        azimuth,
-        elevation
-      });
-    }
-  }
-  /**
-   * Clip plane has changed
-   */
-  onClipPlaneChangeHandler(clipPlane) {
-    if (this.isInSession && this.sessionBus) {
-      this.sessionBus.sendSessionMessage({
-        op: 2 /* CLIP_PLANE */,
-        clipPlane
-      });
-    }
-  }
-  /**
-   * Add an image and notify subscribers
-   */
-  onVolumeAddedFromUrlHandler(imageOptions, volume) {
-    if (this.isInSession && this.sessionBus) {
-      log.debug(imageOptions);
-      this.sessionBus.sendSessionMessage({
-        op: 5 /* VOLUME_ADDED_FROM_URL */,
-        imageOptions
-      });
-    }
-    volume.onColormapChange = this.onColormapChangeHandler.bind(this);
-    volume.onOpacityChange = this.onOpacityChangeHandler.bind(this);
-  }
-  /**
-   * A volume has been added
-   */
-  onImageLoadedHandler(volume) {
-    volume.onColormapChange = this.onColormapChangeHandler.bind(this);
-    volume.onOpacityChange = this.onOpacityChangeHandler.bind(this);
-    if (this.isInSession && this.sessionBus && this.niivue.mediaUrlMap.has(volume)) {
-      const url = this.niivue.mediaUrlMap.get(volume);
-      this.sessionBus.sendSessionMessage({
-        // TODO this was "volume with url added", but there is VOLUME_ADDED_FROM_URL -- not sure if that is meant?
-        // That would break the switch statement above
-        op: "volume with url added" /* VOLUME_LOADED_FROM_URL */,
-        url
-      });
-    }
-  }
-  /**
-   * Notifies other users that a volume has been removed
-   */
-  onVolumeWithUrlRemovedHandler(url) {
-    if (this.isInSession && this.sessionBus) {
-      this.sessionBus.sendSessionMessage({
-        op: 6 /* VOLUME_WITH_URL_REMOVED */,
-        url
-      });
-    }
-  }
-  /**
-   * Notifies that a mesh has been loaded by URL
-   */
-  onMeshAddedFromUrlHandler(meshOptions) {
-    log.debug("mesh loaded from url");
-    log.debug(meshOptions);
-    if (this.isInSession && this.sessionBus) {
-      this.sessionBus.sendSessionMessage({
-        op: 9 /* MESH_FROM_URL_ADDED */,
-        meshOptions
-      });
-    }
-  }
-  /**
-   * Notifies that a mesh has been added
-   */
-  onMeshLoadedHandler(mesh) {
-    log.debug("mesh has been added");
-    log.debug(mesh);
-  }
-  onMeshWithUrlRemovedHandler(url) {
-    if (this.isInSession && this.sessionBus) {
-      this.sessionBus.sendSessionMessage({
-        op: 10 /* MESH_WITH_URL_REMOVED */,
-        url
-      });
-    }
-  }
-  /**
-   *
-   * @param volume - volume that has changed color maps
-   */
-  onColormapChangeHandler(volume) {
-    if (this.isInSession && this.sessionBus && this.niivue.mediaUrlMap.has(volume)) {
-      const url = this.niivue.mediaUrlMap.get(volume);
-      const colormap = volume.colormap;
-      this.sessionBus.sendSessionMessage({
-        op: 7 /* COLORMAP_CHANGED */,
-        url,
-        colormap
-      });
-    }
-  }
-  /**
-   * @param volume - volume that has changed opacity
-   */
-  onOpacityChangeHandler(volume) {
-    if (this.isInSession && this.sessionBus && this.niivue.mediaUrlMap.has(volume)) {
-      const url = this.niivue.mediaUrlMap.get(volume);
-      const opacity = volume.opacity;
-      this.sessionBus.sendSessionMessage({
-        op: 8 /* OPACITY_CHANGED */,
-        url,
-        opacity
-      });
-    }
-  }
-  /**
-   * Frame for 4D image has changed
-   */
-  onFrameChangeHandler(volume, index) {
-    log.debug("frame has changed to " + index);
-    log.debug(volume);
-    if (this.niivue.mediaUrlMap.has(volume) && this.isInSession && this.sessionBus) {
-      const url = this.niivue.mediaUrlMap.get(volume);
-      this.sessionBus.sendSessionMessage({
-        op: 4 /* FRAME_CHANGED */,
-        url,
-        index
-      });
-    }
-    this.onFrameChange(volume, index);
-  }
-  /**
-   * Custom mesh shader has been added
-   * @param fragmentShaderText - shader code to be compiled
-   * @param name - name of shader, can be used as index
-   */
-  onCustomMeshShaderAddedHandler(fragmentShaderText, name) {
-    if (this.isInSession && this.sessionBus) {
-      this.sessionBus.sendSessionMessage({
-        op: 11 /* CUSTOM_SHADER_ADDED */,
-        fragmentShaderText,
-        name
-      });
-    }
-  }
-  /**
-   * Mesh shader has changed
-   * @param meshIndex - index of mesh
-   * @param shaderIndex - index of shader
-   */
-  onMeshShaderChanged(meshIndex, shaderIndex) {
-    if (this.isInSession && this.sessionBus) {
-      this.sessionBus.sendSessionMessage({
-        op: 12 /* SHADER_CHANGED */,
-        meshIndex,
-        shaderIndex
-      });
-    }
-  }
-  /**
-   * Mesh property has been changed
-   * @param meshIndex - index of mesh
-   * @param key - property index
-   * @param val - property value
-   */
-  onMeshPropertyChanged(meshIndex, key, val) {
-    if (this.isInSession && this.sessionBus) {
-      log.debug(13 /* MESH_PROPERTY_CHANGED */);
-      this.sessionBus.sendSessionMessage({
-        op: 13 /* MESH_PROPERTY_CHANGED */,
-        meshIndex,
-        key,
-        val
-      });
-    }
-  }
-};
-
 // src/niivue/index.ts
 var MESH_EXTENSIONS = [
   "ASC",
@@ -30472,8 +29566,9 @@ var Niivue = class {
     __publicField(this, "volumeTexture", null);
     // the GPU memory storage of the volume
     __publicField(this, "gradientTexture", null);
-    // 3D texture for volume rnedering lighting
+    // 3D texture for volume rendering lighting
     __publicField(this, "gradientTextureAmount", 0);
+    __publicField(this, "renderGradientValues", false);
     __publicField(this, "drawTexture", null);
     // the GPU memory storage of the drawing
     __publicField(this, "drawUndoBitmaps", []);
@@ -30511,6 +29606,7 @@ var Niivue = class {
     __publicField(this, "line3DShader");
     __publicField(this, "passThroughShader");
     __publicField(this, "renderGradientShader");
+    __publicField(this, "renderGradientValuesShader");
     __publicField(this, "renderSliceShader");
     __publicField(this, "renderVolumeShader");
     __publicField(this, "pickingMeshShader");
@@ -30536,7 +29632,9 @@ var Niivue = class {
     __publicField(this, "orientShaderRGBU", null);
     __publicField(this, "surfaceShader", null);
     __publicField(this, "blurShader", null);
-    __publicField(this, "sobelShader", null);
+    __publicField(this, "sobelBlurShader", null);
+    __publicField(this, "sobelFirstOrderShader", null);
+    __publicField(this, "sobelSecondOrderShader", null);
     __publicField(this, "genericVAO", null);
     // used for 2D slices, 2D lines, 2D Fonts
     __publicField(this, "unusedVAO", null);
@@ -30904,7 +30002,6 @@ var Niivue = class {
     __publicField(this, "mediaUrlMap", /* @__PURE__ */ new Map());
     __publicField(this, "initialized", false);
     __publicField(this, "currentDrawUndoBitmap");
-    __publicField(this, "loadingText");
     for (const name in options) {
       if (typeof options[name] === "function") {
         this[name] = options[name];
@@ -30912,10 +30009,12 @@ var Niivue = class {
         this.opts[name] = DEFAULT_OPTIONS[name] === void 0 ? DEFAULT_OPTIONS[name] : options[name];
       }
     }
-    if (this.opts.isHighResolutionCapable) {
+    if (this.opts.forceDevicePixelRatio === 0) {
       this.uiData.dpr = window.devicePixelRatio || 1;
-    } else {
+    } else if (this.opts.forceDevicePixelRatio < 0) {
       this.uiData.dpr = 1;
+    } else {
+      this.uiData.dpr = this.opts.forceDevicePixelRatio;
     }
     this.currentDrawUndoBitmap = this.opts.maxDrawUndoBitmaps;
     if (this.opts.drawingEnabled) {
@@ -30924,7 +30023,6 @@ var Niivue = class {
     if (this.opts.thumbnail.length > 0) {
       this.thumbnailVisible = true;
     }
-    this.loadingText = this.opts.loadingText;
     log.setLogLevel(this.opts.logLevel);
   }
   get scene() {
@@ -31007,7 +30105,7 @@ var Niivue = class {
    * @param id - the id of an html canvas element
    * @param isAntiAlias - determines if anti-aliasing is requested (if not specified, AA usage depends on hardware)
    * @example niivue = new Niivue().attachTo('gl')
-   * @example niivue.attachTo('gl')
+   * @example await niivue.attachTo('gl')
    * @see {@link https://niivue.github.io/niivue/features/basic.multiplanar.html | live demo usage}
    */
   async attachTo(id, isAntiAlias = null) {
@@ -31020,7 +30118,7 @@ var Niivue = class {
    * @param canvas - the canvas element reference
    * @example
    * niivue = new Niivue()
-   * niivue.attachToCanvas(document.getElementById(id))
+   * await niivue.attachToCanvas(document.getElementById(id))
    */
   async attachToCanvas(canvas, isAntiAlias = null) {
     this.canvas = canvas;
@@ -31208,23 +30306,23 @@ var Niivue = class {
       return;
     }
     if (!this.opts.isResizeCanvas) {
-      if (this.opts.isHighResolutionCapable) {
-        log.warn("isHighResolutionCapable requires isResizeCanvas");
-        this.opts.isHighResolutionCapable = false;
+      if (this.opts.forceDevicePixelRatio >= 0) {
+        log.warn("this.opts.forceDevicePixelRatio requires isResizeCanvas");
       }
-      this.uiData.dpr = 1;
       this.drawScene();
       return;
     }
     this.canvas.style.width = "100%";
     this.canvas.style.height = "100%";
     this.canvas.style.display = "block";
-    if (this.opts.isHighResolutionCapable) {
+    if (this.opts.forceDevicePixelRatio === 0) {
       this.uiData.dpr = window.devicePixelRatio || 1;
-      log.debug("devicePixelRatio: " + this.uiData.dpr);
-    } else {
+    } else if (this.opts.forceDevicePixelRatio < 0) {
       this.uiData.dpr = 1;
+    } else {
+      this.uiData.dpr = this.opts.forceDevicePixelRatio;
     }
+    log.debug("devicePixelRatio: " + this.uiData.dpr);
     if ("width" in this.canvas.parentElement) {
       this.canvas.width = this.canvas.parentElement.width * this.uiData.dpr;
       this.canvas.height = this.canvas.parentElement.height * this.uiData.dpr;
@@ -31478,7 +30576,7 @@ var Niivue = class {
   // handler for mouse button up (all buttons)
   // note: no test yet
   mouseUpListener() {
-    function isFunction2(test) {
+    function isFunction(test) {
       return Object.prototype.toString.call(test).indexOf("Function") > -1;
     }
     const uiData = {
@@ -31508,7 +30606,7 @@ var Niivue = class {
     this.drawAddUndoBitmap();
     this.drawPenLocation = [NaN, NaN, NaN];
     this.drawPenAxCorSag = -1;
-    if (isFunction2(this.onMouseUp)) {
+    if (isFunction(this.onMouseUp)) {
       this.onMouseUp(uiData);
     }
     if (this.uiData.isDragging) {
@@ -32293,12 +31391,13 @@ var Niivue = class {
               continue;
             }
             if (this.loaders[ext]) {
-              const toExt = this.loaders[ext].toExt.toUpperCase();
-              if (MESH_EXTENSIONS.includes(toExt)) {
-                log.error(`Drag and drop mesh loader needs work ${ext}`);
-              } else {
-                log.error(`Drag and drop volume loader needs work ${ext}`);
-              }
+              const dataUrl = await readFileAsDataURL(entry);
+              await this.loadImages([
+                {
+                  url: dataUrl,
+                  name: `${entry.name}`
+                }
+              ]);
               continue;
             }
             if (MESH_EXTENSIONS.includes(ext)) {
@@ -32539,19 +31638,15 @@ var Niivue = class {
   }
   /**
    * Force WebGL canvas to use high resolution display, regardless of browser defaults.
-   * @param isHighResolutionCapable - allow high-DPI display
+   * @param forceDevicePixelRatio - -1: block high DPI; 0= allow high DPI: >0 use specified pixel ratio
    * @example niivue.setHighResolutionCapable(true);
    * @see {@link https://niivue.github.io/niivue/features/sync.mesh.html | live demo usage}
    */
-  setHighResolutionCapable(isHighResolutionCapable) {
-    this.opts.isHighResolutionCapable = isHighResolutionCapable;
-    if (isHighResolutionCapable && !this.opts.isResizeCanvas) {
-      log.warn("isHighResolutionCapable requires isResizeCanvas");
-      this.opts.isHighResolutionCapable = false;
+  setHighResolutionCapable(forceDevicePixelRatio) {
+    if (typeof forceDevicePixelRatio === "boolean") {
+      forceDevicePixelRatio = forceDevicePixelRatio ? 0 : -1;
     }
-    if (!this.opts.isHighResolutionCapable) {
-      this.uiData.dpr = 1;
-    }
+    this.opts.forceDevicePixelRatio = forceDevicePixelRatio;
     this.resizeListener();
     this.drawScene();
   }
@@ -33280,7 +32375,7 @@ var Niivue = class {
    * @example
    * niivue = new Niivue()
    * niivue.removeMesh(this.meshes[3])
-   * @see {@link https://niivue.github.io/niivue/features/multiuser.meshes.html | live demo usage}
+   * @see {@link https://niivue.github.io/niivue/features/connectome.html | live demo usage}
    */
   removeMesh(mesh) {
     mesh.unloadMesh(this.gl);
@@ -33619,27 +32714,54 @@ var Niivue = class {
   }
   /**
    * set proportion of volume rendering influenced by selected matcap.
-   * @param gradientAmount - amount of matcap (0..1), default 0 (matte, surface normal does not influence color)
+   * @param gradientAmount - amount of matcap (NaN or 0..1), default 0 (matte, surface normal does not influence color). NaN renders the gradients.
    * @example
    * niivue.setVolumeRenderIllumination(0.6);
    * @see {@link https://niivue.github.io/niivue/features/shiny.volumes.html | live demo usage}
+   * @see {@link https://niivue.github.io/niivue/features/gradient.order.html | live demo usage}
    */
   async setVolumeRenderIllumination(gradientAmount = 0) {
+    this.renderGradientValues = Number.isNaN(gradientAmount);
     this.renderShader = this.renderVolumeShader;
-    if (gradientAmount > 0) {
+    if (this.renderGradientValues) {
+      this.renderShader = this.renderGradientValuesShader;
+    } else if (gradientAmount > 0 || this.opts.gradientOpacity > 0) {
       this.renderShader = this.renderGradientShader;
-    }
-    if (gradientAmount < 0) {
+    } else if (gradientAmount < 0) {
       this.renderShader = this.renderSliceShader;
     }
     this.initRenderShader(this.renderShader, gradientAmount);
     this.renderShader.use(this.gl);
     this.setClipPlaneColor(this.opts.clipPlaneColor);
-    this.gradientTextureAmount = gradientAmount;
+    if (Number.isNaN(gradientAmount)) {
+      this.gradientTextureAmount = 1;
+    } else {
+      this.gradientTextureAmount = gradientAmount;
+    }
     if (this.volumes.length < 1) {
       return;
     }
     this.refreshLayers(this.volumes[0], 0);
+    this.drawScene();
+  }
+  /**
+   * set volume rendering opacity influence of the gradient magnitude
+   * @param gradientOpacity - amount of gradient magnitude influence on opacity (0..1), default 0 (no-influence)
+   * @example
+   * niivue.setGradientOpacity(0.6);
+   * @see {@link https://niivue.github.io/niivue/features/gradient.opacity.html | live demo usage}
+   */
+  async setGradientOpacity(gradientOpacity = 0) {
+    this.opts.gradientOpacity = gradientOpacity;
+    if (this.renderGradientValues) {
+      this.renderShader = this.renderGradientValuesShader;
+    } else if (this.gradientTextureAmount > 0 || gradientOpacity > 0) {
+      this.renderShader = this.renderGradientShader;
+    } else if (this.gradientTextureAmount < 0) {
+      this.renderShader = this.renderSliceShader;
+    }
+    this.initRenderShader(this.renderShader, this.gradientTextureAmount);
+    this.renderShader.use(this.gl);
     this.drawScene();
   }
   // not included in public docs.
@@ -33828,7 +32950,7 @@ var Niivue = class {
         }
 
         var nv1 = new Niivue();
-        nv1.attachTo("${canvasId}");
+        await nv1.attachTo("${canvasId}");
         var base64 = "${base64}";
         NVUtilities.decompressBase64String(base64).then((jsonText) => {
           var json = JSON.parse(jsonText); // string -> JSON
@@ -33969,7 +33091,7 @@ var Niivue = class {
     const meshes = [];
     for (const image of images) {
       if ("url" in image) {
-        const ext = this.getFileExt(image.url);
+        const ext = this.getFileExt(image.name ? image.name : image.url);
         if (this.loaders[ext]) {
           const toExt = this.loaders[ext].toExt.toUpperCase();
           if (MESH_EXTENSIONS.includes(toExt)) {
@@ -34042,7 +33164,6 @@ var Niivue = class {
    * @see {@link https://niivue.github.io/niivue/features/mask.html | live demo usage}
    */
   async loadVolumes(volumeList) {
-    this.loadingText = "loading...";
     this.drawScene();
     if (this.thumbnailVisible) {
       this.deferredVolumes = volumeList;
@@ -34056,7 +33177,6 @@ var Niivue = class {
   }
   /**
    * Add mesh and notify subscribers
-   * @see {@link https://niivue.github.io/niivue/features/multiuser.meshes.html | live demo usage}
    */
   async addMeshFromUrl(meshOptions) {
     const ext = this.getFileExt(meshOptions.url);
@@ -34077,7 +33197,6 @@ var Niivue = class {
   }
   /**
    * Add mesh and notify subscribers
-   * @see {@link https://niivue.github.io/niivue/features/multiuser.meshes.html | live demo usage}
    */
   async addMeshesFromUrl(meshOptions) {
     const promises = meshOptions.map(async (meshItem) => {
@@ -34133,7 +33252,6 @@ var Niivue = class {
    * @see {@link https://niivue.github.io/niivue/features/meshes.html | live demo usage}
    */
   async loadMeshes(meshList) {
-    this.loadingText = "loading...";
     this.drawScene();
     if (this.thumbnailVisible) {
       this.deferredMeshes = meshList;
@@ -34220,7 +33338,6 @@ var Niivue = class {
    * @see {@link https://niivue.github.io/niivue/features/connectome.html | live demo usage}
    */
   loadConnectome(json) {
-    this.loadingText = "loading...";
     this.drawScene();
     this.meshes = [];
     this.gl.clearColor(0, 0, 0, 1);
@@ -35089,6 +34206,41 @@ var Niivue = class {
     return texID;
   }
   // not included in public docs
+  // create 3D 4-component (red,green,blue,alpha) uint16 texture on GPU
+  rgba16Tex(texID, activeID, dims, isInit = false) {
+    if (texID) {
+      this.gl.deleteTexture(texID);
+    }
+    texID = this.gl.createTexture();
+    this.gl.activeTexture(activeID);
+    this.gl.bindTexture(this.gl.TEXTURE_3D, texID);
+    this.gl.texParameteri(this.gl.TEXTURE_3D, this.gl.TEXTURE_MIN_FILTER, this.gl.NEAREST);
+    this.gl.texParameteri(this.gl.TEXTURE_3D, this.gl.TEXTURE_MAG_FILTER, this.gl.NEAREST);
+    this.gl.texParameteri(this.gl.TEXTURE_3D, this.gl.TEXTURE_WRAP_R, this.gl.CLAMP_TO_EDGE);
+    this.gl.texParameteri(this.gl.TEXTURE_3D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
+    this.gl.texParameteri(this.gl.TEXTURE_3D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
+    this.gl.pixelStorei(this.gl.UNPACK_ALIGNMENT, 2);
+    this.gl.pixelStorei(this.gl.PACK_ALIGNMENT, 2);
+    this.gl.texStorage3D(this.gl.TEXTURE_3D, 1, this.gl.RGBA16UI, dims[1], dims[2], dims[3]);
+    if (isInit) {
+      const img16 = new Uint16Array(dims[1] * dims[2] * dims[3] * 4);
+      this.gl.texSubImage3D(
+        this.gl.TEXTURE_3D,
+        0,
+        0,
+        0,
+        0,
+        dims[1],
+        dims[2],
+        dims[3],
+        this.gl.RGBA_INTEGER,
+        this.gl.UNSIGNED_SHORT,
+        img16
+      );
+    }
+    return texID;
+  }
+  // not included in public docs
   // remove cross origin if not from same domain. From https://webglfundamentals.org/webgl/lessons/webgl-cors-permission.html
   requestCORSIfNotSameOrigin(img, url) {
     if (new URL(url, window.location.href).origin !== window.location.origin) {
@@ -35242,7 +34394,7 @@ var Niivue = class {
     this.fontShader.use(this.gl);
     await this.loadDefaultFont();
     await this.loadDefaultMatCap();
-    this.drawLoadingText(this.loadingText);
+    this.drawLoadingText(this.opts.loadingText);
   }
   // not included in public docs
   meshShaderNameToNumber(meshShaderName = "Phong") {
@@ -35340,6 +34492,15 @@ var Niivue = class {
     this.gl.uniform1i(shader.uniforms.drawing, 7);
     this.gl.uniform1fv(shader.uniforms.renderDrawAmbientOcclusion, [this.renderDrawAmbientOcclusion, 1]);
     this.gl.uniform1f(shader.uniforms.gradientAmount, gradientAmount);
+    const gradientOpacityLut = new Float32Array(256);
+    for (let i = 0; i < 256; i++) {
+      if (this.opts.gradientOpacity === 0) {
+        gradientOpacityLut[i] = 1;
+      } else {
+        gradientOpacityLut[i] = Math.pow(i / 255, this.opts.gradientOpacity * 8);
+      }
+    }
+    this.gl.uniform1fv(this.gl.getUniformLocation(shader.program, "gradientOpacity"), gradientOpacityLut);
   }
   // not included in public docs
   async init() {
@@ -35442,12 +34603,18 @@ var Niivue = class {
     this.initRenderShader(this.renderGradientShader, 0.3);
     gl.uniform1i(this.renderGradientShader.uniforms.matCap, 5);
     gl.uniform1i(this.renderGradientShader.uniforms.gradient, 6);
+    this.renderGradientValuesShader = new Shader(gl, vertRenderShader, fragRenderGradientValuesShader);
+    this.initRenderShader(this.renderGradientValuesShader);
+    gl.uniform1i(this.renderGradientValuesShader.uniforms.matCap, 5);
+    gl.uniform1i(this.renderGradientValuesShader.uniforms.gradient, 6);
     this.renderShader = this.renderVolumeShader;
     this.colorbarShader = new Shader(gl, vertColorbarShader, fragColorbarShader);
     this.colorbarShader.use(gl);
     gl.uniform1i(this.colorbarShader.uniforms.colormap, 1);
     this.blurShader = new Shader(gl, blurVertShader, blurFragShader);
-    this.sobelShader = new Shader(gl, blurVertShader, sobelFragShader);
+    this.sobelBlurShader = new Shader(gl, blurVertShader, sobelBlurFragShader);
+    this.sobelFirstOrderShader = new Shader(gl, blurVertShader, sobelFirstOrderFragShader);
+    this.sobelSecondOrderShader = new Shader(gl, blurVertShader, sobelSecondOrderFragShader);
     this.growCutShader = new Shader(gl, vertGrowCutShader, fragGrowCutShader);
     this.passThroughShader = new Shader(gl, vertPassThroughShader, fragPassThroughShader);
     this.orientShaderAtlasU = new Shader(gl, vertOrientShader, fragOrientShaderU.concat(fragOrientShaderAtlas));
@@ -35500,8 +34667,8 @@ var Niivue = class {
     gl.disable(gl.CULL_FACE);
     gl.viewport(0, 0, hdr.dims[1], hdr.dims[2]);
     gl.disable(gl.BLEND);
-    const tempTex3D = this.rgbaTex(null, TEXTURE8_GRADIENT_TEMP, hdr.dims);
-    const blurShader = this.blurShader;
+    const tempTex3D = this.rgbaTex(null, TEXTURE8_GRADIENT_TEMP, hdr.dims, true);
+    const blurShader = this.opts.gradientOrder === 2 ? this.sobelBlurShader : this.blurShader;
     blurShader.use(gl);
     gl.activeTexture(TEXTURE0_BACK_VOL);
     gl.bindTexture(gl.TEXTURE_3D, this.volumeTexture);
@@ -35515,10 +34682,14 @@ var Niivue = class {
       const coordZ = 1 / hdr.dims[3] * (i + 0.5);
       gl.uniform1f(blurShader.uniforms.coordZ, coordZ);
       gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, tempTex3D, 0, i);
+      const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+      if (status !== gl.FRAMEBUFFER_COMPLETE) {
+        log.error("framebuffer status: ", status);
+      }
       gl.clear(gl.DEPTH_BUFFER_BIT);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, faceStrip.length / 3);
     }
-    const sobelShader = this.sobelShader;
+    const sobelShader = this.opts.gradientOrder === 2 ? this.sobelSecondOrderShader : this.sobelFirstOrderShader;
     sobelShader.use(gl);
     gl.activeTexture(TEXTURE8_GRADIENT_TEMP);
     gl.bindTexture(gl.TEXTURE_3D, tempTex3D);
@@ -35527,9 +34698,13 @@ var Niivue = class {
     gl.uniform1f(sobelShader.uniforms.dX, sobelRadius / hdr.dims[1]);
     gl.uniform1f(sobelShader.uniforms.dY, sobelRadius / hdr.dims[2]);
     gl.uniform1f(sobelShader.uniforms.dZ, sobelRadius / hdr.dims[3]);
+    if (this.opts.gradientOrder === 2) {
+      gl.uniform1f(sobelShader.uniforms.dX2, 2 * sobelRadius / hdr.dims[1]);
+      gl.uniform1f(sobelShader.uniforms.dY2, 2 * sobelRadius / hdr.dims[2]);
+      gl.uniform1f(sobelShader.uniforms.dZ2, 2 * sobelRadius / hdr.dims[3]);
+    }
     gl.uniform1f(sobelShader.uniforms.coordZ, 0.5);
     gl.bindVertexArray(vao2);
-    gl.activeTexture(TEXTURE0_BACK_VOL);
     if (this.gradientTexture !== null) {
       gl.deleteTexture(this.gradientTexture);
     }
@@ -35538,6 +34713,10 @@ var Niivue = class {
       const coordZ = 1 / hdr.dims[3] * (i + 0.5);
       gl.uniform1f(sobelShader.uniforms.coordZ, coordZ);
       gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, this.gradientTexture, 0, i);
+      const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+      if (status !== gl.FRAMEBUFFER_COMPLETE) {
+        log.error("framebuffer status: ", status);
+      }
       gl.clear(gl.DEPTH_BUFFER_BIT);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, faceStrip.length / 3);
     }
@@ -36989,6 +36168,7 @@ var Niivue = class {
     if (volume.nTotalFrame4D <= volume.nFrame4D) {
       return;
     }
+    volume.nTotalFrame4D = volume.nFrame4D;
     let v;
     if (volume.fileObject) {
       v = await NVImage.loadFromFile({ file: volume.fileObject });
@@ -38031,6 +37211,9 @@ var Niivue = class {
   }
   // not included in public docs
   drawLoadingText(text) {
+    if (!text) {
+      return;
+    }
     if (!this.canvas) {
       throw new Error("canvas undefined");
     }
@@ -39824,7 +39007,9 @@ var Niivue = class {
       h = this.gl.canvas.width / this.bmpTextureWH;
       w = this.gl.canvas.width;
     }
-    this.gl.uniform4f(this.bmpShader.uniforms.leftTopWidthHeight, 0, 0, w, h);
+    const left = (this.gl.canvas.width - w) / 2;
+    const top = (this.gl.canvas.height - h) / 2;
+    this.gl.uniform4f(this.bmpShader.uniforms.leftTopWidthHeight, left, top, w, h);
     this.gl.bindVertexArray(this.genericVAO);
     this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
     this.gl.bindVertexArray(this.unusedVAO);
@@ -40255,7 +39440,7 @@ var Niivue = class {
         }
         return;
       }
-      this.drawLoadingText(this.loadingText);
+      this.drawLoadingText(this.opts.loadingText);
       return;
     }
     if (this.back === null) {
@@ -40583,7 +39768,6 @@ export {
   LabelLineTerminator,
   LabelTextAlignment,
   MULTIPLANAR_TYPE,
-  NVController,
   NVDocument,
   NVImage,
   NVImageFromUrlOptions,

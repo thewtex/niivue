@@ -52,11 +52,10 @@
     { url: "../images/stats.nv_demo_mskd.nii.gz", colormap: "warm", colormapNegative: "winter", frame4D: 1, cal_min: 3.3641, cal_max: 6},
   ];
   var nv1 = new niivue.Niivue({
-    logging: true,
     show3Dcrosshair: true,
     onLocationChange: handleIntensityChange,
   });
-  nv1.attachTo("gl1", true);
+  await nv1.attachTo("gl1", true);
   nv1.opts.isColorbar = true;
   nv1.opts.multiplanarShowRender = niivue.SHOW_RENDER.ALWAYS;
   await nv1.loadVolumes(volumeList1);

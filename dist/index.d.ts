@@ -1,6 +1,5 @@
 import { mat4, vec3, vec4, vec2 } from 'gl-matrix';
 import { NIFTI1, NIFTI2 } from 'nifti-reader-js';
-import { WebSocketSubject } from 'rxjs/webSocket';
 
 type ColorMap = {
     R: number[];
@@ -209,7 +208,10 @@ declare enum ImageType {
     DCM_FOLDER = 16,
     SRC = 17,
     FIB = 18,
-    BMP = 19
+    BMP = 19,
+    ZARR = 20,
+    NPY = 21,
+    NPZ = 22
 }
 type ImageFromUrlOptions = {
     url: string;
@@ -397,8 +399,10 @@ declare class NVImage {
     SetPixDimFromSForm(): void;
     readECAT(buffer: ArrayBuffer): ArrayBuffer;
     readV16(buffer: ArrayBuffer): ArrayBuffer;
+    readNPY(buffer: ArrayBuffer): Promise<ArrayBuffer>;
+    readNPZ(buffer: ArrayBuffer): Promise<ArrayBuffer>;
     imageDataFromArrayBuffer(buffer: ArrayBuffer): Promise<ImageData>;
-    readBMP(buffer: ArrayBuffer): Promise<Uint8Array>;
+    readBMP(buffer: ArrayBuffer): Promise<ArrayBuffer>;
     readVMR(buffer: ArrayBuffer): ArrayBuffer;
     readMGH(buffer: ArrayBuffer): Promise<ArrayBuffer>;
     readFIB(buffer: ArrayBuffer): Promise<[ArrayBuffer, Float32Array]>;
@@ -408,7 +412,7 @@ declare class NVImage {
     readMIF(buffer: ArrayBuffer, pairedImgData: ArrayBuffer | null): Promise<ArrayBuffer>;
     readNRRD(dataBuffer: ArrayBuffer, pairedImgData: ArrayBuffer | null): Promise<ArrayBuffer>;
     calculateRAS(): void;
-    hdr2RAS(nVolumes?: number): NIFTI1 | NIFTI2;
+    hdr2RAS(nVolumes?: number): Promise<NIFTI1 | NIFTI2>;
     img2RAS(nVolume?: number): TypedVoxelArray;
     vox2mm(XYZ: number[], mtx: mat4): vec3;
     mm2vox(mm: number[], frac?: boolean): Float32Array | vec3;
@@ -438,7 +442,10 @@ declare class NVImage {
         name: string;
         data: ArrayBuffer;
     }>>;
-    static fetchPartial(url: string, bytesToLoad: number, headers?: Record<string, string>): Promise<Response>;
+    static readFirstDecompressedBytes(stream: ReadableStream<Uint8Array>, minBytes: number): Promise<Uint8Array>;
+    static extractFilenameFromUrl(url: string): string | null;
+    static loadInitialVolumesGz(url?: string, headers?: {}, limitFrames4D?: number): Promise<ArrayBuffer | null>;
+    static loadInitialVolumes(url?: string, headers?: {}, limitFrames4D?: number): Promise<ArrayBuffer | null>;
     /**
      * factory function to load and return a new NVImage instance from a given URL
      * @returns  NVImage instance
@@ -683,7 +690,7 @@ type NVConfigOptions = {
     sagittalNoseLeft: boolean;
     isSliceMM: boolean;
     isV1SliceShader: boolean;
-    isHighResolutionCapable: boolean;
+    forceDevicePixelRatio: number;
     logLevel: 'debug' | 'info' | 'warn' | 'error' | 'fatal' | 'silent';
     loadingText: string;
     isForceMouseClickToVoxelCenters: boolean;
@@ -727,6 +734,8 @@ type NVConfigOptions = {
     measureLineColor: number[];
     measureTextHeight: number;
     isAlphaClipDark: boolean;
+    gradientOrder: number;
+    gradientOpacity: number;
 };
 declare const DEFAULT_OPTIONS: NVConfigOptions;
 type SceneData = {
@@ -1093,11 +1102,16 @@ type ANNOT = Uint32Array | {
     scalars: Float32Array;
     colormapLabel: LUT;
 };
-type MZ3 = Float32Array | {
+type MZ3 = {
     positions: Float32Array | null;
     indices: Uint32Array | null;
     scalars: Float32Array;
     colors: Float32Array | null;
+} | {
+    scalars: Float32Array;
+    colormapLabel: LUT;
+} | {
+    scalars: Float32Array;
 };
 type GII = {
     scalars: Float32Array;
@@ -1303,219 +1317,12 @@ declare class NVMesh {
     loadFromBase64({ base64, gl, name, opacity, rgba255, visible, layers }?: Partial<LoadFromBase64Params>): Promise<NVMesh>;
 }
 
-/**
- * Enum for sync operations
- */
-declare enum NVMESSAGE {
-    ZOOM = 1,// "zoom",
-    CLIP_PLANE = 2,// "clipPlane",
-    AZIMUTH_ELEVATION = 3,// "ae",
-    FRAME_CHANGED = 4,// "frame changed",
-    VOLUME_ADDED_FROM_URL = 5,// "volume added from url",
-    VOLUME_WITH_URL_REMOVED = 6,// "volume with url removed",
-    COLORMAP_CHANGED = 7,// "color map has changed",
-    OPACITY_CHANGED = 8,// "opacity has changed",
-    MESH_FROM_URL_ADDED = 9,// "mesh added from url",
-    MESH_WITH_URL_REMOVED = 10,// "mesh with url removed",
-    CUSTOM_SHADER_ADDED = 11,// "custom shader added",
-    SHADER_CHANGED = 12,// "mesh shader changed",
-    MESH_PROPERTY_CHANGED = 13,// "mesh property changed",
-    USER_JOINED = "user joined",// TODO this breaks the scheme a bit -- see session-bus::localStorageEventListener
-    CREATE = "create",// TODO same as above
-    VOLUME_LOADED_FROM_URL = "volume with url added"
-}
-type Message = {
-    userKey?: string;
-    from?: string;
-} & ({
-    op: NVMESSAGE.ZOOM;
-    zoom: number;
-} | {
-    op: NVMESSAGE.CLIP_PLANE;
-    clipPlane: number[];
-} | {
-    op: NVMESSAGE.AZIMUTH_ELEVATION;
-    elevation: number;
-    azimuth: number;
-} | {
-    op: NVMESSAGE.FRAME_CHANGED;
-    url: string;
-    index: number;
-} | {
-    op: NVMESSAGE.VOLUME_ADDED_FROM_URL;
-    imageOptions: any;
-} | {
-    op: NVMESSAGE.VOLUME_LOADED_FROM_URL;
-    url: string;
-} | {
-    op: NVMESSAGE.VOLUME_WITH_URL_REMOVED;
-    url: string;
-} | {
-    op: NVMESSAGE.COLORMAP_CHANGED;
-    url: string;
-    colormap: string;
-} | {
-    op: NVMESSAGE.OPACITY_CHANGED;
-    url: string;
-    opacity: number;
-} | {
-    op: NVMESSAGE.MESH_FROM_URL_ADDED;
-    meshOptions: LoadFromUrlParams;
-} | {
-    op: NVMESSAGE.MESH_WITH_URL_REMOVED;
-    url: string;
-} | {
-    op: NVMESSAGE.CUSTOM_SHADER_ADDED;
-    fragmentShaderText: string;
-    name: string;
-} | {
-    op: NVMESSAGE.SHADER_CHANGED;
-    meshIndex: number;
-    shaderIndex: number;
-} | {
-    op: NVMESSAGE.MESH_PROPERTY_CHANGED;
-    meshIndex: number;
-    key: string;
-    val: unknown;
-} | {
-    op: NVMESSAGE.USER_JOINED;
-    user: SessionUser;
-} | {
-    op: NVMESSAGE.CREATE;
-    key: string;
-});
-
-/**
- * SessionUser specifies display name, user id and user key
- * @param userKey - Used to protect user properties
- */
-declare class SessionUser {
-    id: string;
-    displayName: string;
-    key: string;
-    properties: Map<string, string>;
-    constructor(displayName?: string, userId?: string, userKey?: string, userProperties?: Map<string, string>);
-}
-/**
- * SessionBus is for synchronizing both remote and local instances
- */
-declare class SessionBus {
-    userList: SessionUser[];
-    user: SessionUser;
-    userQueueName?: string;
-    userListName?: string;
-    onMessageCallback: (newMessage: Message) => void;
-    isConnectedToServer: boolean;
-    isController: boolean;
-    sessionScene: {};
-    sessionKey: string;
-    sessionName: string;
-    sessionSceneName: string;
-    serverConnection$: WebSocketSubject<Message> | null;
-    constructor(name: string, user: SessionUser, onMessageCallback: (newMessage: Message) => void, serverURL?: string, sessionKey?: string);
-    sendSessionMessage(message: Message): void;
-    connectToServer(serverURL: string, sessionName: string): void;
-    subscribeToServer(): void;
-    sendLocalMessage(message: Message): void;
-    localStorageEventListener(e: StorageEvent): void;
-}
-
-/**
- * NVController is for synchronizing both remote and local instances of Niivue
- * @ignore
- */
-declare class NVController {
-    niivue: Niivue;
-    mediaUrlMap: Map<string, unknown>;
-    isInSession: boolean;
-    user?: SessionUser;
-    sessionBus?: SessionBus;
-    onFrameChange: (_volume: NVImage, _index: number) => void;
-    /**
-     * @param niivue - niivue object to control
-     */
-    constructor(niivue: Niivue);
-    onLocationChangeHandler(location: unknown): void;
-    addVolume(volume: NVImage, url: string): void;
-    addMesh(mesh: NVMesh, url: string): void;
-    onNewMessage(msg: Message): void;
-    /**
-     * Connects to existing session or creates new session
-     */
-    connectToSession(sessionName: string, user?: SessionUser, serverBaseUrl?: string, sessionKey?: string): void;
-    /**
-     * Zoom level has changed
-     */
-    onZoom3DChangeHandler(zoom: number): void;
-    /**
-     * Azimuth and/or elevation has changed
-     */
-    onAzimuthElevationChangeHandler(azimuth: number, elevation: number): void;
-    /**
-     * Clip plane has changed
-     */
-    onClipPlaneChangeHandler(clipPlane: number[]): void;
-    /**
-     * Add an image and notify subscribers
-     */
-    onVolumeAddedFromUrlHandler(imageOptions: ImageFromUrlOptions, volume: NVImage): void;
-    /**
-     * A volume has been added
-     */
-    onImageLoadedHandler(volume: NVImage): void;
-    /**
-     * Notifies other users that a volume has been removed
-     */
-    onVolumeWithUrlRemovedHandler(url: string): void;
-    /**
-     * Notifies that a mesh has been loaded by URL
-     */
-    onMeshAddedFromUrlHandler(meshOptions: LoadFromUrlParams): void;
-    /**
-     * Notifies that a mesh has been added
-     */
-    onMeshLoadedHandler(mesh: NVMesh): void;
-    onMeshWithUrlRemovedHandler(url: string): void;
-    /**
-     *
-     * @param volume - volume that has changed color maps
-     */
-    onColormapChangeHandler(volume: NVImage): void;
-    /**
-     * @param volume - volume that has changed opacity
-     */
-    onOpacityChangeHandler(volume: NVImage): void;
-    /**
-     * Frame for 4D image has changed
-     */
-    onFrameChangeHandler(volume: NVImage, index: number): void;
-    /**
-     * Custom mesh shader has been added
-     * @param fragmentShaderText - shader code to be compiled
-     * @param name - name of shader, can be used as index
-     */
-    onCustomMeshShaderAddedHandler(fragmentShaderText: string, name: string): void;
-    /**
-     * Mesh shader has changed
-     * @param meshIndex - index of mesh
-     * @param shaderIndex - index of shader
-     */
-    onMeshShaderChanged(meshIndex: number, shaderIndex: number): void;
-    /**
-     * Mesh property has been changed
-     * @param meshIndex - index of mesh
-     * @param key - property index
-     * @param val - property value
-     */
-    onMeshPropertyChanged(meshIndex: number, key: string, val: unknown): void;
-}
-
 type TypedNumberArray = Float64Array | Float32Array | Uint32Array | Uint16Array | Uint8Array | Int32Array | Int16Array | Int8Array;
 declare class NVUtilities {
     static arrayBufferToBase64(arrayBuffer: ArrayBuffer): string;
     static decompress(data: Uint8Array): Promise<Uint8Array>;
     static decompressToBuffer(data: Uint8Array): Promise<ArrayBuffer>;
-    static readMatV4(buffer: ArrayBuffer): Promise<Record<string, TypedNumberArray>>;
+    static readMatV4(buffer: ArrayBuffer, isReplaceDots?: boolean): Promise<Record<string, TypedNumberArray>>;
     static b64toUint8(base64: string): Uint8Array;
     static uint8tob64(bytes: Uint8Array): string;
     static download(content: string | ArrayBuffer, fileName: string, contentType: string): void;
@@ -1752,6 +1559,7 @@ declare class Niivue {
     volumeTexture: WebGLTexture | null;
     gradientTexture: WebGLTexture | null;
     gradientTextureAmount: number;
+    renderGradientValues: boolean;
     drawTexture: WebGLTexture | null;
     drawUndoBitmaps: Uint8Array[];
     drawLut: LUT;
@@ -1778,6 +1586,7 @@ declare class Niivue {
     line3DShader?: Shader;
     passThroughShader?: Shader;
     renderGradientShader?: Shader;
+    renderGradientValuesShader?: Shader;
     renderSliceShader?: Shader;
     renderVolumeShader?: Shader;
     pickingMeshShader?: Shader;
@@ -1801,7 +1610,9 @@ declare class Niivue {
     orientShaderRGBU: Shader | null;
     surfaceShader: Shader | null;
     blurShader: Shader | null;
-    sobelShader: Shader | null;
+    sobelBlurShader: Shader | null;
+    sobelFirstOrderShader: Shader | null;
+    sobelSecondOrderShader: Shader | null;
     genericVAO: WebGLVertexArrayObject | null;
     unusedVAO: any;
     crosshairs3D: NiivueObject3D | null;
@@ -2048,7 +1859,6 @@ declare class Niivue {
     mediaUrlMap: Map<NVImage | NVMesh, string>;
     initialized: boolean;
     currentDrawUndoBitmap: number;
-    loadingText: string;
     /**
      * @param options  - options object to set modifiable Niivue properties
      */
@@ -2073,7 +1883,7 @@ declare class Niivue {
      * @param id - the id of an html canvas element
      * @param isAntiAlias - determines if anti-aliasing is requested (if not specified, AA usage depends on hardware)
      * @example niivue = new Niivue().attachTo('gl')
-     * @example niivue.attachTo('gl')
+     * @example await niivue.attachTo('gl')
      * @see {@link https://niivue.github.io/niivue/features/basic.multiplanar.html | live demo usage}
      */
     attachTo(id: string, isAntiAlias?: any): Promise<this>;
@@ -2082,7 +1892,7 @@ declare class Niivue {
      * @param canvas - the canvas element reference
      * @example
      * niivue = new Niivue()
-     * niivue.attachToCanvas(document.getElementById(id))
+     * await niivue.attachToCanvas(document.getElementById(id))
      */
     attachToCanvas(canvas: HTMLCanvasElement, isAntiAlias?: boolean | null): Promise<this>;
     /**
@@ -2311,11 +2121,11 @@ declare class Niivue {
     getRadiologicalConvention(): boolean;
     /**
      * Force WebGL canvas to use high resolution display, regardless of browser defaults.
-     * @param isHighResolutionCapable - allow high-DPI display
+     * @param forceDevicePixelRatio - -1: block high DPI; 0= allow high DPI: >0 use specified pixel ratio
      * @example niivue.setHighResolutionCapable(true);
      * @see {@link https://niivue.github.io/niivue/features/sync.mesh.html | live demo usage}
      */
-    setHighResolutionCapable(isHighResolutionCapable: boolean): void;
+    setHighResolutionCapable(forceDevicePixelRatio: number | boolean): void;
     /**
      * add a new volume to the canvas
      * @param volume - the new volume to add to the canvas
@@ -2484,7 +2294,7 @@ declare class Niivue {
      * @example
      * niivue = new Niivue()
      * niivue.removeMesh(this.meshes[3])
-     * @see {@link https://niivue.github.io/niivue/features/multiuser.meshes.html | live demo usage}
+     * @see {@link https://niivue.github.io/niivue/features/connectome.html | live demo usage}
      */
     removeMesh(mesh: NVMesh): void;
     /**
@@ -2648,12 +2458,21 @@ declare class Niivue {
     setClipVolume(low: number[], high: number[]): void;
     /**
      * set proportion of volume rendering influenced by selected matcap.
-     * @param gradientAmount - amount of matcap (0..1), default 0 (matte, surface normal does not influence color)
+     * @param gradientAmount - amount of matcap (NaN or 0..1), default 0 (matte, surface normal does not influence color). NaN renders the gradients.
      * @example
      * niivue.setVolumeRenderIllumination(0.6);
      * @see {@link https://niivue.github.io/niivue/features/shiny.volumes.html | live demo usage}
+     * @see {@link https://niivue.github.io/niivue/features/gradient.order.html | live demo usage}
      */
     setVolumeRenderIllumination(gradientAmount?: number): Promise<void>;
+    /**
+     * set volume rendering opacity influence of the gradient magnitude
+     * @param gradientOpacity - amount of gradient magnitude influence on opacity (0..1), default 0 (no-influence)
+     * @example
+     * niivue.setGradientOpacity(0.6);
+     * @see {@link https://niivue.github.io/niivue/features/gradient.opacity.html | live demo usage}
+     */
+    setGradientOpacity(gradientOpacity?: number): Promise<void>;
     overlayRGBA(volume: NVImage): Uint8ClampedArray;
     vox2mm(XYZ: number[], mtx: mat4): vec3;
     /**
@@ -2731,12 +2550,10 @@ declare class Niivue {
     loadVolumes(volumeList: ImageFromUrlOptions[]): Promise<this>;
     /**
      * Add mesh and notify subscribers
-     * @see {@link https://niivue.github.io/niivue/features/multiuser.meshes.html | live demo usage}
      */
     addMeshFromUrl(meshOptions: LoadFromUrlParams): Promise<NVMesh>;
     /**
      * Add mesh and notify subscribers
-     * @see {@link https://niivue.github.io/niivue/features/multiuser.meshes.html | live demo usage}
      */
     addMeshesFromUrl(meshOptions: LoadFromUrlParams[]): Promise<NVMesh[]>;
     /**
@@ -2824,6 +2641,7 @@ declare class Niivue {
     refreshDrawing(isForceRedraw?: boolean, useClickToSegmentBitmap?: boolean): void;
     r8Tex(texID: WebGLTexture | null, activeID: number, dims: number[], isInit?: boolean): WebGLTexture | null;
     rgbaTex(texID: WebGLTexture | null, activeID: number, dims: number[], isInit?: boolean): WebGLTexture | null;
+    rgba16Tex(texID: WebGLTexture | null, activeID: number, dims: number[], isInit?: boolean): WebGLTexture | null;
     requestCORSIfNotSameOrigin(img: HTMLImageElement, url: string): void;
     loadPngAsTexture(pngUrl: string, textureNum: number): Promise<WebGLTexture | null>;
     loadFontTexture(fontUrl: string): Promise<WebGLTexture | null>;
@@ -3196,4 +3014,4 @@ declare class Niivue {
     set gl(gl: WebGL2RenderingContext | null);
 }
 
-export { COLORMAP_TYPE, type Connectome, type ConnectomeOptions, DEFAULT_OPTIONS, DRAG_MODE, DRAG_MODE_PRIMARY, DRAG_MODE_SECONDARY, type DicomLoader, type DicomLoaderInput, type DocumentData, type DragReleaseParams, type ExportDocumentData, INITIAL_SCENE_DATA, LabelAnchorPoint, LabelLineTerminator, LabelTextAlignment, type LegacyConnectome, type LegacyNodes, MULTIPLANAR_TYPE, type NVConfigOptions, type NVConnectomeEdge, type NVConnectomeNode, NVController, NVDocument, NVImage, NVImageFromUrlOptions, NVLabel3D, NVLabel3DStyle, NVMesh, NVMeshFromUrlOptions, NVMeshLayerDefaults, NVMeshLoaders, NVMeshUtilities, NVUtilities, type NiftiHeader, type NiiVueLocation, type NiiVueLocationValue, Niivue, type Point, SHOW_RENDER, SLICE_TYPE, type Scene, type SyncOpts, type Volume, cmapper, ColorTables as colortables };
+export { COLORMAP_TYPE, type Connectome, type ConnectomeOptions, DEFAULT_OPTIONS, DRAG_MODE, DRAG_MODE_PRIMARY, DRAG_MODE_SECONDARY, type DicomLoader, type DicomLoaderInput, type DocumentData, type DragReleaseParams, type ExportDocumentData, INITIAL_SCENE_DATA, LabelAnchorPoint, LabelLineTerminator, LabelTextAlignment, type LegacyConnectome, type LegacyNodes, MULTIPLANAR_TYPE, type NVConfigOptions, type NVConnectomeEdge, type NVConnectomeNode, NVDocument, NVImage, NVImageFromUrlOptions, NVLabel3D, NVLabel3DStyle, NVMesh, NVMeshFromUrlOptions, NVMeshLayerDefaults, NVMeshLoaders, NVMeshUtilities, NVUtilities, type NiftiHeader, type NiiVueLocation, type NiiVueLocationValue, Niivue, type Point, SHOW_RENDER, SLICE_TYPE, type Scene, type SyncOpts, type Volume, cmapper, ColorTables as colortables };
