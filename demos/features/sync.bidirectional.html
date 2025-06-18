@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+    <title>Bidirectional Sync</title>
+    <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: system-ui, Arial, Helvetica, sans-serif;
+      user-select: none;
+      color: white;
+      background: #202020; /* only seen outside main */
+    }
+    
+    header, footer {
+      padding: 1rem;
+      background: #202020;
+    }
+
+main {
+  flex-grow: 1;
+  display: flex;
+  justify-content: center;
+  background-color: #808080;
+  height: calc(100vh - 6rem); /* assumes header + footer ≈ 6rem total */
+}
+
+.row {
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+.canvas-container {
+  flex: 1 1 33.3333%;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  height: 100%;
+}
+
+canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  background-color: #000;
+  image-rendering: pixelated;
+}
+
+    </style>
+  </head>
+  <body>
+    <header>
+        <label for="layout">Layout</label>
+        <select id="layout">
+          <option value="0" selected>Auto</option>
+          <option value="1">Column</option>
+          <option value="2">Grid</option>
+          <option value="3">Row</option>
+        </select>
+        <label for="syncDrop"> Broadcast</label>
+        <select id="syncDrop">
+          <option value="0">Sync Disabled</option>
+          <option value="1">Sync 2D</option>
+          <option value="2">Sync 3D</option>
+          <option value="3" selected>Sync 2D and 3D</option>
+        </select>
+    </header>
+    <main>
+      <div class="row">
+        <div class="canvas-container"><canvas id="gl1"></canvas></div>
+        <div class="canvas-container"><canvas id="gl2"></canvas></div>
+        <div class="canvas-container"><canvas id="gl3"></canvas></div>
+      </div>
+    </main>
+    <footer>
+      <x id="status1"> &nbsp;</x>
+      <x id="status2"> &nbsp;</x>
+      <x id="status3"> &nbsp;</x>
+    </footer>
+  </body>
+  <script type="module" async>
+    import * as niivue from "../dist/index.js"
+    layout.onchange = function () {
+      nv1.setMultiplanarLayout(parseInt(this.value))
+      nv2.setMultiplanarLayout(parseInt(this.value))
+      nv3.setMultiplanarLayout(parseInt(this.value))
+    }
+    syncDrop.onchange = function() {
+      const v = parseInt(syncDrop.value)
+      let is2D = false
+      let is3D = false
+      if (v % 2) {
+          is2D = true
+      }
+      if (v > 1) {
+          is3D = true
+      }
+      nv1.broadcastTo([nv2, nv3], { "2d": is2D, "3d": is3D })
+      nv2.broadcastTo([nv1, nv3], { "2d": is2D, "3d": is3D })
+      nv3.broadcastTo([nv1, nv2], { "2d": is2D, "3d": is3D })
+    }
+    function handleChange1(data) {
+      status1.innerHTML = "&nbsp;&nbsp;" + data.string
+    }
+    function handleChange2(data) {
+      status2.innerHTML = "&nbsp;&nbsp;" + data.string
+    }
+    function handleChange3(data) {
+      status3.innerHTML = "&nbsp;&nbsp;" + data.string
+    }
+    var nv1 = new niivue.Niivue({onLocationChange: handleChange1})
+    var nv2 = new niivue.Niivue({onLocationChange: handleChange2})
+    var nv3 = new niivue.Niivue({onLocationChange: handleChange3})
+    nv1.opts.multiplanarForceRender = true
+    nv2.opts.multiplanarForceRender = true
+    nv3.opts.multiplanarForceRender = true
+    await nv1.attachTo("gl1")
+    await nv2.attachTo("gl2")
+    await nv3.attachTo("gl3")
+    var volumeList1 = [{ url: "../images/pcasl.nii.gz" }]
+    var volumeList2 = [{ url: "../images/aal.nii.gz" }]
+    var volumeList3 = [{ url: "../images/mni152.nii.gz"}]
+    await nv1.loadVolumes(volumeList1)
+    await nv2.loadVolumes(volumeList2)
+    await nv3.loadVolumes(volumeList3)
+    // make sure all views can control each other
+    nv1.broadcastTo([nv2, nv3], { "3d": true, "2d": true })
+   nv2.broadcastTo([nv1, nv3], { "3d": true, "2d": true })
+   nv3.broadcastTo([nv1, nv2], { "3d": true, "2d": true })
+  </script>
+</html>
