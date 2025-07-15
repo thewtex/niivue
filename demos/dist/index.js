@@ -5247,7 +5247,110 @@ var forEach3 = function() {
 }();
 
 // package.json
-var version = "0.58.0";
+var package_default = {
+  name: "@niivue/niivue",
+  version: "0.61.0",
+  description: "minimal webgl2 nifti image viewer",
+  types: "./build/index.d.ts",
+  main: "./build/index.js",
+  type: "module",
+  unpkg: "./dist/index.min.js",
+  module: "./build/index.js",
+  exports: {
+    ".": {
+      import: "./build/index.js"
+    },
+    "./min": {
+      import: "./build/index.min.js"
+    }
+  },
+  scripts: {
+    dev: "vite",
+    "build:umd": "vite build --config vite.config.js --base=./ && vite build --config vite.config_inject.js --base=./",
+    build: "tsup --config tsup.config.ts && npm run build:forTests && npm run build:min && npm run build:umd",
+    "build:forTests": "tsup --config tsup.config.tests.ts && npm run build:mindemos",
+    "build:min": "node bundle.js",
+    "build:mindemos": "node bundleForDemos.js",
+    demo: "npm run build:forTests && rm -rf demos/dist && cp -r dist demos/dist && npx http-server demos/ --cors",
+    "demo-win": "npm run build && npx http-server demos/",
+    test: "npm run build:forTests && npm run test:unit && jest --maxWorkers=1",
+    "test-win": "npm run build-win && jest",
+    "test-playwright": 'npx playwright test --grep-invert "niivue demo file:"',
+    "test-demos": "npx playwright test playwright/e2e/test.demos.spec.ts",
+    docs: "typedoc && rm -rf ../docs/docs/api && cp -r devdocs ../docs/docs/api",
+    "test:unit": "vitest --run --coverage",
+    "serve-docs": "npx http-server devdocs",
+    pub: "npm run build && npm publish --access public",
+    lint: "eslint .",
+    "lint:ts": "tsc --noEmit",
+    "lint:fix": "eslint --fix .",
+    "lint:debug": "DEBUG=eslint:cli-engine eslint .",
+    "pretest-playwright": "npm run build:forTests && node preplaywrighttest.cjs && tsc --incremental -p playwright/e2e/tsconfig.json",
+    "pretest-demos": "npm run build:forTests && node preplaywrighttest.cjs && tsc --incremental -p playwright/e2e/tsconfig.json"
+  },
+  files: [
+    "src",
+    "build",
+    "dist"
+  ],
+  repository: {
+    type: "git",
+    url: "git+https://github.com/niivue/niivue.git"
+  },
+  keywords: [
+    "niivue",
+    "webgl2",
+    "nifti",
+    "image",
+    "viewer"
+  ],
+  author: "niivue authors",
+  license: "BSD-2-Clause",
+  bugs: {
+    url: "https://github.com/niivue/niivue/issues"
+  },
+  homepage: "https://github.com/niivue/niivue#readme",
+  dependencies: {
+    "@lukeed/uuid": "^2.0.1",
+    "@ungap/structured-clone": "^1.2.0",
+    "array-equal": "^1.0.2",
+    fflate: "^0.8.2",
+    "gl-matrix": "^3.4.3",
+    "nifti-reader-js": "^0.8.0",
+    zarrita: "^0.5.0"
+  },
+  devDependencies: {
+    "@playwright/test": "^1.45.2",
+    "@rollup/plugin-commonjs": "^26.0.1",
+    "@types/array-equal": "^1.0.2",
+    "@types/node": "^20.14.11",
+    "@types/ungap__structured-clone": "^1.2.0",
+    "@typescript-eslint/eslint-plugin": "^7.16.1",
+    "@typescript-eslint/parser": "^7.16.1",
+    "@vitest/coverage-v8": "^3.1.3",
+    eslint: "^8.57.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-config-standard": "^17.1.0",
+    "eslint-plugin-prettier": "^5.2.1",
+    "eslint-plugin-tsdoc": "^0.3.0",
+    express: "^4.19.2",
+    "happy-dom": "^15.11.6",
+    "http-server": "^14.1.1",
+    prettier: "^3.3.3",
+    "regenerator-runtime": "^0.14.1",
+    terser: "^5.31.3",
+    tsup: "^8.1.2",
+    typedoc: "^0.28.5",
+    "typedoc-docusaurus-theme": "^1.4.0",
+    "typedoc-plugin-markdown": "^4.7.0",
+    typescript: "^5.5.3",
+    vite: "^5.3.4",
+    vitest: "^3.1.3"
+  },
+  optionalDependencies: {
+    "@rollup/rollup-linux-x64-gnu": "^4.18.1"
+  }
+};
 
 // src/logger.ts
 var _Log = class _Log {
@@ -5845,7 +5948,7 @@ var fragRenderGradientShader = kFragRenderGradientDecl + kRenderFunc + kRenderIn
 				firstHit = samplePos;
 			backNearest = min(backNearest, samplePos.a);
 			colorSample.a = 1.0-pow((1.0 - colorSample.a), opacityCorrection);
-			int gradIdx = int(grad.a * 255.0);
+			int gradIdx = int(grad.a * ${gradientOpacityLutCount}.0);
 			colorSample.a *= gradientOpacity[gradIdx];
 			float lightNormDot = dot(grad.rgb, rayDir);
 			// n.b. "lightNormDor" is cosTheta, "silhouettePower" is Fresnel effect exponent
@@ -6342,48 +6445,94 @@ uniform highp isampler3D intensityVol;
 var fragOrientShaderF = `#version 300 es
 uniform highp sampler3D intensityVol;
 `;
-var fragOrientShaderAtlas = `#line 636
+var fragOrientShaderAtlas = `#line 1042
 precision highp int;
 precision highp float;
 in vec2 TexCoord;
 out vec4 FragColor;
+uniform bool isAdditiveBlend;
 uniform float coordZ;
 uniform float layer;
 uniform highp sampler2D colormap;
 uniform lowp sampler3D blend3D;
 uniform float opacity;
+uniform uint activeIndex;
 uniform vec4 xyzaFrac;
 uniform mat4 mtx;
+float textureWidth;
+float nlayer;
+float layerY;
+
+vec4 scalar2color(uint idx) {
+	float fx = (float(idx) + 0.5) / textureWidth;
+	vec4 clr = texture(colormap, vec2(fx, layerY)).rgba;
+	if (clr.a > 0.0)
+		clr.a = 1.0;
+	clr.a *= opacity;
+	return clr;
+}
 void main(void) {
 	vec4 vx = vec4(TexCoord.x, TexCoord.y, coordZ, 1.0) * mtx;
 	uint idx = uint(texture(intensityVol, vx.xyz).r);
-	FragColor = vec4(0.0, 0.0, 0.0, 0.0);
-	if (idx == uint(0))
+	if (idx == uint(0)) {
+		if (layer < 1.0) {
+			FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+			return;
+		}
+		FragColor = texture(blend3D, vec3(TexCoord.xy, coordZ));
 		return;
-	//idx = ((idx - uint(1)) % uint(100))+uint(1);
-	float textureWidth = float(textureSize(colormap, 0).x);
-	float fx = (float(idx)+0.5) / textureWidth;
-	float nlayer = float(textureSize(colormap, 0).y);
-	float y = ((2.0 * layer) + 1.5)/nlayer;
-	FragColor = texture(colormap, vec2(fx, y)).rgba;
-	float alpha = FragColor.a;
-	FragColor.a *= opacity;
-	if (xyzaFrac.a > 0.0) { //outline
-		vx = vec4(TexCoord.x+xyzaFrac.x, TexCoord.y, coordZ, 1.0) * mtx;
-		uint R = uint(texture(intensityVol, vx.xyz).r);
-		vx = vec4(TexCoord.x-xyzaFrac.x, TexCoord.y, coordZ, 1.0) * mtx;
-		uint L = uint(texture(intensityVol, vx.xyz).r);
-		vx = vec4(TexCoord.x, TexCoord.y+xyzaFrac.y, coordZ, 1.0) * mtx;
-		uint A = uint(texture(intensityVol, vx.xyz).r);
-		vx = vec4(TexCoord.x, TexCoord.y-xyzaFrac.y, coordZ, 1.0) * mtx;
-		uint P = uint(texture(intensityVol, vx.xyz).r);
-		vx = vec4(TexCoord.x, TexCoord.y, coordZ+xyzaFrac.z, 1.0) * mtx;
-		uint S = uint(texture(intensityVol, vx.xyz).r);
-		vx = vec4(TexCoord.x, TexCoord.y, coordZ-xyzaFrac.z, 1.0) * mtx;
-		uint I = uint(texture(intensityVol, vx.xyz).r);
-		if ((idx != R) || (idx != L) || (idx != A) || (idx != P) || (idx != S) || (idx != I))
-			FragColor.a = alpha * xyzaFrac.a;
 	}
+	textureWidth = float(textureSize(colormap, 0).x);
+	nlayer = float(textureSize(colormap, 0).y);
+	layerY = ((2.0 * layer) + 1.5) / nlayer;
+	//idx = ((idx - uint(1)) % uint(100))+uint(1);
+	FragColor = scalar2color(idx);
+	bool isBorder = false;
+	vx = vec4(TexCoord.x+xyzaFrac.x, TexCoord.y, coordZ, 1.0) * mtx;
+	uint R = uint(texture(intensityVol, vx.xyz).r);
+	vx = vec4(TexCoord.x-xyzaFrac.x, TexCoord.y, coordZ, 1.0) * mtx;
+	uint L = uint(texture(intensityVol, vx.xyz).r);
+	vx = vec4(TexCoord.x, TexCoord.y+xyzaFrac.y, coordZ, 1.0) * mtx;
+	uint A = uint(texture(intensityVol, vx.xyz).r);
+	vx = vec4(TexCoord.x, TexCoord.y-xyzaFrac.y, coordZ, 1.0) * mtx;
+	uint P = uint(texture(intensityVol, vx.xyz).r);
+	vx = vec4(TexCoord.x, TexCoord.y, coordZ+xyzaFrac.z, 1.0) * mtx;
+	uint S = uint(texture(intensityVol, vx.xyz).r);
+	vx = vec4(TexCoord.x, TexCoord.y, coordZ-xyzaFrac.z, 1.0) * mtx;
+	uint I = uint(texture(intensityVol, vx.xyz).r);
+	if (xyzaFrac.a != 0.0) { //outline
+		if ((idx != R) || (idx != L) || (idx != A) || (idx != P) || (idx != S) || (idx != I)) {
+			isBorder = true;
+			if (xyzaFrac.a > 0.0)
+				FragColor.a = xyzaFrac.a;
+			else
+				FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+		}
+	}
+	vec4 centerColor = FragColor;
+	FragColor.a += scalar2color(R).a;
+	FragColor.a += scalar2color(L).a;
+	FragColor.a += scalar2color(A).a;
+	FragColor.a += scalar2color(P).a;
+	FragColor.a += scalar2color(S).a;
+	FragColor.a += scalar2color(I).a;
+	FragColor.a /= 7.0;
+	if ((!isBorder) &&(idx == activeIndex)) {
+		if (centerColor.a > 0.5)
+			FragColor.a *= 0.4;
+		else
+			FragColor.a =0.8;
+	}
+	if (layer < 1.0) return;
+		vec4 prevColor = texture(blend3D, vec3(TexCoord.xy, coordZ));
+		// https://en.wikipedia.org/wiki/Alpha_compositing
+		float aout = FragColor.a + (1.0 - FragColor.a) * prevColor.a;
+		if (aout <= 0.0) return;
+		if (isAdditiveBlend)
+			FragColor.rgb = ((FragColor.rgb * FragColor.a) + (prevColor.rgb * prevColor.a)) / aout;
+		else
+			FragColor.rgb = ((FragColor.rgb * FragColor.a) + (prevColor.rgb * prevColor.a * (1.0 - FragColor.a))) / aout;
+		FragColor.a = aout;
 }`;
 var fragOrientShader = `#line 691
 precision highp int;
@@ -6482,6 +6631,77 @@ void main(void) {
 		FragColor.rgb = ((FragColor.rgb * FragColor.a) + (prevColor.rgb * prevColor.a * (1.0 - FragColor.a))) / aout;
 	FragColor.a = aout;
 }`;
+var fragSPARQOrientShader = `#line 773
+precision highp int;
+precision highp float;
+in vec2 TexCoord;
+out vec4 FragColor;
+uniform float coordZ;
+uniform float layer;
+uniform float scl_slope;
+uniform float scl_inter;
+uniform float cal_max;
+uniform float cal_min;
+uniform highp sampler2D colormap;
+uniform lowp sampler3D blend3D;
+uniform float opacity;
+uniform mat4 mtx;
+uniform bool hasAlpha;
+uniform int modulation;
+uniform highp sampler3D modulationVol;
+float textureWidth;
+float nlayer;
+float layerY;
+
+vec4 scalar2color(uint idx) {
+	float fx = (float(idx) + 0.5) / textureWidth;
+	vec4 clr = texture(colormap, vec2(fx, layerY)).rgba;
+	if (clr.a > 0.0)
+		clr.a = 1.0;
+	clr.a *= opacity;
+	return clr;
+}
+
+vec4 sparq2color(uvec4 rgba) {
+  // sparc r: max prob index, g: 2nd index, b: max prob a: 2nd prob
+  float prob1 = float(rgba.b)/255.0;
+  float prob2 = float(rgba.a)/255.0;
+  vec4 clr1 = scalar2color(rgba.r);
+  vec4 clr2 = scalar2color(rgba.g);
+  float total = prob1 + prob2;
+  vec4 clr = vec4(clr1.rgb, total);
+  // vec4 clr = vec4(clr1.rgb, prob1);
+  if (total > 0.0) {
+    clr.rgb = mix(clr2.rgb, clr1.rgb, prob1 / total);
+  }
+  return clr;
+}
+void main(void) {
+	vec4 vx = vec4(TexCoord.xy, coordZ, 1.0) * mtx;
+	ivec3 voxelCoord = ivec3(vx.xyz * vec3(textureSize(intensityVol, 0)));
+	uvec4 rgba = texelFetch(intensityVol, voxelCoord, 0);
+	if (rgba.r == uint(0)) {
+		if (layer < 1.0) {
+			FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+			return;
+		}
+		FragColor = texture(blend3D, vec3(TexCoord.xy, coordZ));
+		return;
+	}
+	textureWidth = float(textureSize(colormap, 0).x);
+	nlayer = float(textureSize(colormap, 0).y);
+	layerY = ((2.0 * layer) + 1.5) / nlayer;
+	FragColor = sparq2color(rgba);
+	FragColor.a *= opacity;
+	if (layer < 1.0) return;
+	vec4 prevColor = texture(blend3D, vec3(TexCoord.xy, coordZ));
+	// https://en.wikipedia.org/wiki/Alpha_compositing
+	float aout = FragColor.a + (1.0 - FragColor.a) * prevColor.a;
+	if (aout <= 0.0) return;
+	FragColor.rgb = ((FragColor.rgb * FragColor.a) + (prevColor.rgb * prevColor.a * (1.0 - FragColor.a))) / aout;
+	FragColor.a = aout;
+
+}`;
 var fragRGBOrientShader = `#line 773
 precision highp int;
 precision highp float;
@@ -6514,6 +6734,13 @@ void main(void) {
 	if (modulation == 2)
 		FragColor.a = texture(modulationVol, vx.xyz).r;
 	FragColor.a *= opacity;
+	if (layer < 1.0) return;
+	vec4 prevColor = texture(blend3D, vec3(TexCoord.xy, coordZ));
+	// https://en.wikipedia.org/wiki/Alpha_compositing
+	float aout = FragColor.a + (1.0 - FragColor.a) * prevColor.a;
+	if (aout <= 0.0) return;
+	FragColor.rgb = ((FragColor.rgb * FragColor.a) + (prevColor.rgb * prevColor.a * (1.0 - FragColor.a))) / aout;
+	FragColor.a = aout;
 }`;
 var vertGrowCutShader = `#version 300 es
 #line 808
@@ -16745,15 +16972,8 @@ var ColorTables = class {
   makeDrawLut(name) {
     let cmap = typeof name === "object" ? name : cmaps_exports[name];
     if (cmap === void 0) {
-      cmap = {
-        min: 0,
-        max: 0,
-        R: [0, 255, 0, 0, 255, 0, 255],
-        G: [0, 0, 255, 0, 255, 255, 0],
-        B: [0, 0, 0, 255, 0, 255, 255],
-        A: [0, 255, 255, 255, 255, 255, 255],
-        I: [0, 255]
-      };
+      log.warn("colormap undefined ", name);
+      cmap = this.colormapFromKey("");
     }
     const cm = this.makeLabelLut(cmap, 255);
     if (cm.labels === void 0) {
@@ -17346,7 +17566,7 @@ var NVUtilities = class _NVUtilities {
       }
       return new Float64Array(byteArray.buffer);
     }
-    function readTag() {
+    function readTag2() {
       const mtype = reader.getUint32(pos, true);
       const mrows = reader.getUint32(pos + 4, true);
       const ncols = reader.getUint32(pos + 8, true);
@@ -17385,7 +17605,7 @@ var NVUtilities = class _NVUtilities {
       pos = posEnd;
     }
     while (pos + 20 < len4) {
-      readTag();
+      readTag2();
     }
     return mat;
   }
@@ -23255,6 +23475,9 @@ async function readHeaderAsync(data, isHdrImgPairOK = false) {
   header.readHeader(dat);
   return header;
 }
+function hasExtension(header) {
+  return header.extensionFlag[0] != 0;
+}
 function readImage(header, data) {
   var imageOffset = header.vox_offset, timeDim = 1, statDim = 1;
   if (header.dims[4]) {
@@ -25056,7 +25279,7 @@ function hdrToArrayBuffer(hdr, isDrawing8 = false, isInputEndian = false) {
     view.setFloat32(112, 1, isLittleEndian);
     view.setFloat32(116, 0, isLittleEndian);
   } else {
-    view.setFloat32(108, 352, isLittleEndian);
+    view.setFloat32(108, hdr.vox_offset, isLittleEndian);
     view.setFloat32(112, hdr.scl_slope, isLittleEndian);
     view.setFloat32(116, hdr.scl_inter, isLittleEndian);
   }
@@ -25291,7 +25514,32 @@ function toUint8Array(nvImage, drawingBytes = null) {
   }
   const isDrawing = drawingBytes !== null;
   const hdrCopy = JSON.parse(JSON.stringify(nvImage.hdr));
-  hdrCopy.vox_offset = Math.max(352, hdrCopy.vox_offset);
+  const hasExtensions = nvImage.extensions && nvImage.extensions.length > 0;
+  const extFlag = new Uint8Array(4);
+  extFlag[0] = hasExtensions ? 1 : 0;
+  let extensionsData = new Uint8Array(0);
+  if (hasExtensions) {
+    const blocks = [];
+    let totalSize = 0;
+    for (const ext of nvImage.extensions) {
+      const edataBytes = new Uint8Array(ext.edata);
+      const block = new Uint8Array(8 + edataBytes.length);
+      const dv = new DataView(block.buffer);
+      dv.setInt32(0, ext.esize, true);
+      dv.setInt32(4, ext.ecode, true);
+      block.set(edataBytes, 8);
+      blocks.push(block);
+      totalSize += block.length;
+    }
+    extensionsData = new Uint8Array(totalSize);
+    let offset2 = 0;
+    for (const block of blocks) {
+      extensionsData.set(block, offset2);
+      offset2 += block.length;
+    }
+  }
+  const headerSize = 348;
+  hdrCopy.vox_offset = Math.max(352, headerSize + extFlag.length + extensionsData.length);
   if (isDrawing) {
     hdrCopy.datatypeCode = 2 /* DT_UINT8 */;
     hdrCopy.numBitsPerVoxel = 8;
@@ -25355,13 +25603,20 @@ function toUint8Array(nvImage, drawingBytes = null) {
     }
     imageBytesToSave = new Uint8Array(nvImage.img.buffer, nvImage.img.byteOffset, nvImage.img.byteLength);
   }
-  const headerSize = hdrBytes.length;
-  const paddingSize = Math.max(0, hdrCopy.vox_offset - headerSize);
+  const preImageBytesSize = hdrBytes.length + extFlag.length + extensionsData.length;
+  const paddingSize = Math.max(0, hdrCopy.vox_offset - preImageBytesSize);
   const padding = new Uint8Array(paddingSize);
   const totalLength = hdrCopy.vox_offset + imageBytesToSave.length;
   const outputData = new Uint8Array(totalLength);
-  outputData.set(hdrBytes, 0);
-  outputData.set(padding, headerSize);
+  let offset = 0;
+  outputData.set(hdrBytes, offset);
+  offset += hdrBytes.length;
+  outputData.set(extFlag, offset);
+  offset += extFlag.length;
+  outputData.set(extensionsData, offset);
+  offset += extensionsData.length;
+  outputData.set(padding, offset);
+  offset += padding.length;
   outputData.set(imageBytesToSave, hdrCopy.vox_offset);
   return outputData;
 }
@@ -25443,6 +25698,9 @@ function getValue(nvImage, x, y, z, frame4D = 0, isReadImaginary = false) {
     if (vx + 2 >= nvImage.img.length) {
       log.warn(`getValue: Calculated index ${vx} out of bounds for RGBA data.`);
       return 0;
+    }
+    if (nvImage.hdr.intent_code === 1002) {
+      return nvImage.img[vx];
     }
     const lum = nvImage.img[vx] * 0.2126 + nvImage.img[vx + 1] * 0.7152 + nvImage.img[vx + 2] * 0.0722;
     return Math.round(lum);
@@ -25634,35 +25892,131 @@ function setVolumeData(nvImage, voxStartRAS = [-1, 0, 0], voxEndRAS = [0, 0, 0],
 // src/nvimage/ImageReaders/mgh.ts
 var mgh_exports = {};
 __export(mgh_exports, {
+  isFreeSurferLabelImage: () => isFreeSurferLabelImage,
+  optimizeFreeSurferLabels: () => optimizeFreeSurferLabels,
   readMgh: () => readMgh
 });
-function readFirstTag1String(view, offset, footerLength) {
+function readTag(view, offset, footerLength, tagToRead = 1) {
   const end = offset + footerLength;
   let pos = offset;
+  const results = [];
   while (pos + 12 <= end) {
     const tag = view.getInt32(pos, false);
     const length4 = view.getInt32(pos + 8, false);
     pos += 12;
-    if (tag !== 1) {
+    if (length4 <= 0 || pos + length4 > end) {
+      break;
+    }
+    if (tag !== tagToRead) {
       pos += length4;
       continue;
     }
-    if (pos + 4 > end) {
-      return "";
+    let strLen = length4;
+    let contentPos = pos;
+    if (tagToRead === 1) {
+      if (pos + 4 > end) {
+        break;
+      }
+      strLen = view.getInt32(pos, false);
+      contentPos += 4;
     }
-    const strLen = view.getInt32(pos, false);
-    pos += 4;
-    if (strLen <= 1 || pos + strLen > end) {
-      return "";
+    if (strLen > 1 && contentPos + strLen <= end) {
+      const raw = new Uint8Array(view.buffer, contentPos, strLen);
+      const str6 = new TextDecoder("utf-8").decode(raw.slice(0, -1));
+      results.push(str6);
     }
-    const raw = new Uint8Array(view.buffer, pos, strLen);
-    return new TextDecoder("utf-8").decode(raw.slice(0, -1));
+    pos += length4;
   }
-  return "";
+  return results.join("\n\n");
+}
+function optimizeFreeSurferLabels(hdr, imgRaw) {
+  hdr.intent_code = 1002;
+  if (hdr.datatypeCode !== 16 /* DT_FLOAT32 */ && hdr.datatypeCode !== 8 /* DT_INT32 */) {
+    return imgRaw;
+  }
+  let img = new Float32Array(imgRaw);
+  if (hdr.datatypeCode === 8 /* DT_INT32 */) {
+    img = new Int32Array(imgRaw);
+  }
+  if (isPlatformLittleEndian()) {
+    const u32 = new Uint32Array(imgRaw);
+    for (let i = 0; i < u32.length; i++) {
+      const val = u32[i];
+      u32[i] = (val & 255) << 24 | (val & 65280) << 8 | (val & 16711680) >>> 8 | (val & 4278190080) >>> 24;
+    }
+  }
+  hdr.littleEndian = isPlatformLittleEndian();
+  let isInteger = true;
+  let mn = Infinity;
+  let mx = -Infinity;
+  for (let i = 0; i < img.length; i++) {
+    const v = img[i];
+    if (!Number.isFinite(v)) {
+      continue;
+    }
+    if (!Number.isInteger(v)) {
+      isInteger = false;
+    }
+    if (v < mn) {
+      mn = v;
+    }
+    if (v > mx) {
+      mx = v;
+    }
+  }
+  if (!isInteger || mn < 0 || mx > 2147483647) {
+    log.warn(`FreeSurfer Labels must be integers in INT32 range. range ${mn}..${mx}`);
+    return imgRaw;
+  }
+  if (mx > 32767) {
+    hdr.datatypeCode = 8 /* DT_INT32 */;
+    const out = new Int32Array(img.length);
+    for (let i = 0; i < img.length; i++) {
+      out[i] = Math.trunc(img[i]);
+    }
+    return out.buffer;
+  } else if (mx > 255) {
+    hdr.datatypeCode = 4 /* DT_INT16 */;
+    hdr.numBitsPerVoxel = 16;
+    const out = new Int16Array(img.length);
+    for (let i = 0; i < img.length; i++) {
+      out[i] = Math.trunc(img[i]);
+    }
+    return out.buffer;
+  } else {
+    hdr.datatypeCode = 2 /* DT_UINT8 */;
+    hdr.numBitsPerVoxel = 8;
+    const out = new Uint8Array(img.length);
+    for (let i = 0; i < img.length; i++) {
+      out[i] = Math.trunc(img[i]);
+    }
+    return out.buffer;
+  }
+}
+function isFreeSurferLabelImage(raw, hdr, expectedBytes) {
+  const remainingBytes = raw.byteLength - hdr.vox_offset;
+  if (remainingBytes < expectedBytes) {
+    log.error(`MGH image data size mismatch: expected ${expectedBytes}, found ${remainingBytes}`);
+    return false;
+  }
+  if (remainingBytes === expectedBytes) {
+    return false;
+  }
+  const footerStart = hdr.vox_offset + expectedBytes + 20;
+  const footerLength = raw.byteLength - footerStart;
+  if (footerLength <= 12) {
+    return false;
+  }
+  const tag1 = readTag(new DataView(raw), footerStart, footerLength);
+  if (tag1.toLowerCase().endsWith("lut.txt")) {
+    return true;
+  }
+  const tag3 = readTag(new DataView(raw), footerStart, footerLength, 3);
+  return tag3.includes("mri_label2vol");
 }
 async function readMgh(nvImage, buffer) {
   if (!nvImage.hdr) {
-    log.warn("readMgh called before nvImage.hdr was initialized. Creating default.");
+    log.debug("readMgh called before nvImage.hdr was initialized. Creating default.");
     nvImage.hdr = new NIFTI1();
   }
   const hdr = nvImage.hdr;
@@ -25775,24 +26129,10 @@ async function readMgh(nvImage, buffer) {
   const nBytesPerVoxel = hdr.numBitsPerVoxel / 8;
   const nVoxels = width * height * depth * hdr.dims[4];
   const expectedBytes = nVoxels * nBytesPerVoxel;
-  const remainingBytes = raw.byteLength - hdr.vox_offset;
-  if (remainingBytes < expectedBytes) {
-    log.error(`MGH image data size mismatch: expected ${expectedBytes}, found ${remainingBytes}`);
-    return null;
-  } else if (remainingBytes > expectedBytes) {
-    log.warn(`MGH file has extra ${remainingBytes - expectedBytes} bytes after image data. Truncating.`);
-    const footerStart = hdr.vox_offset + expectedBytes + 20;
-    const footerLength = raw.byteLength - footerStart;
-    if (footerLength > 12) {
-      const firstTag1String = readFirstTag1String(reader, footerStart, footerLength);
-      const isLUT = firstTag1String.toLowerCase().endsWith("lut.txt");
-      if (isLUT) {
-        hdr.intent_code = 1002;
-      }
-      log.debug(`First tag 1 string: ${firstTag1String} isLUT: ${isLUT}`);
-    }
-  }
   const imgRaw = raw.slice(hdr.vox_offset, hdr.vox_offset + expectedBytes);
+  if (isFreeSurferLabelImage(raw, hdr, expectedBytes)) {
+    return optimizeFreeSurferLabels(hdr, imgRaw);
+  }
   return imgRaw;
 }
 
@@ -25814,6 +26154,9 @@ async function readNifti(nvImage, buffer) {
       throw new Error("Buffer became invalid after decompression attempt.");
     }
     nvImage.hdr = await readHeaderAsync(dataBuffer);
+    if (hasExtension(nvImage.hdr)) {
+      nvImage.extensions = nvImage.hdr.extensions;
+    }
     if (nvImage.hdr === null) {
       throw new Error(`Failed to read NIfTI header: ${nvImage.name}`);
     }
@@ -26133,33 +26476,6 @@ async function readNrrd(nvImage, dataBuffer, pairedImgData = null) {
 
 // src/nvimage/index.ts
 var NVImage = class _NVImage {
-  /**
-   *
-   * @param dataBuffer - an array buffer of image data to load (there are also methods that abstract this more. See loadFromUrl, and loadFromFile)
-   * @param name - a name for this image. Default is an empty string
-   * @param colormap - a color map to use. default is gray
-   * @param opacity - the opacity for this image. default is 1
-   * @param pairedImgData - Allows loading formats where header and image are separate files (e.g. nifti.hdr, nifti.img)
-   * @param cal_min - minimum intensity for color brightness/contrast
-   * @param cal_max - maximum intensity for color brightness/contrast
-   * @param trustCalMinMax - whether or not to trust cal_min and cal_max from the nifti header (trusting results in faster loading)
-   * @param percentileFrac - the percentile to use for setting the robust range of the display values (smart intensity setting for images with large ranges)
-   * @param ignoreZeroVoxels - whether or not to ignore zero voxels in setting the robust range of display values
-   * @param useQFormNotSForm - give precedence to QForm (Quaternion) or SForm (Matrix)
-   * @param colormapNegative - a color map to use for symmetrical negative intensities
-   * @param frame4D - volume displayed, 0 indexed, must be less than nFrame4D
-   *
-   * FIXME the following params are documented but not included in the actual constructor
-   * @param onColormapChange - callback for color map change
-   * @param onOpacityChange -callback for color map change
-   *
-   * TODO the following parameters were not documented
-   * @param imageType - TODO
-   * @param cal_minNeg - TODO
-   * @param cal_maxNeg - TODO
-   * @param colorbarVisible - TODO
-   * @param colormapLabel - TODO
-   */
   constructor(dataBuffer = null, name = "", colormap = "gray", opacity = 1, pairedImgData = null, cal_min = NaN, cal_max = NaN, trustCalMinMax = true, percentileFrac = 0.02, ignoreZeroVoxels = false, useQFormNotSForm = false, colormapNegative = "", frame4D = 0, imageType = NVIMAGE_TYPE.UNKNOWN, cal_minNeg = NaN, cal_maxNeg = NaN, colorbarVisible = true, colormapLabel = null, colormapType = 0) {
     __publicField(this, "name");
     __publicField(this, "id");
@@ -26209,6 +26525,7 @@ var NVImage = class _NVImage {
     __publicField(this, "extentsMaxOrtho");
     __publicField(this, "mm2ortho");
     __publicField(this, "hdr", null);
+    __publicField(this, "extensions");
     __publicField(this, "imageType");
     __publicField(this, "img");
     __publicField(this, "imaginary");
@@ -27870,11 +28187,12 @@ var NVImage = class _NVImage {
     if (len4 < 20) {
       throw new Error("File too small to be MIF: bytes = " + len4);
     }
-    const bytes = new Uint8Array(buffer);
+    let bytes = new Uint8Array(buffer);
     if (bytes[0] === 31 && bytes[1] === 139) {
       log.debug("MIF with GZ decompression");
       buffer = await NVUtilities.decompressToBuffer(new Uint8Array(buffer));
       len4 = buffer.byteLength;
+      bytes = new Uint8Array(buffer);
     }
     let pos = 0;
     function readStr() {
@@ -28484,7 +28802,7 @@ var NVImage = class _NVImage {
    * @param vol - volume for estimate (use -1 to use estimate on all loaded volumes; use INFINITY for current volume)
    * @param isBorder - if true (default) only center of volume used for estimate
    * @returns volume brightness and returns array [pct2, pct98, mnScale, mxScale]
-   * @see {@link https://niivue.github.io/niivue/features/timeseries2.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/timeseries2.html | live demo usage}
    */
   calMinMax(vol = Number.POSITIVE_INFINITY, isBorder = true) {
     if (!this.hdr) {
@@ -28727,9 +29045,6 @@ var NVImage = class _NVImage {
   /**
    * Converts NVImage to NIfTI compliant byte array, potentially compressed.
    * Delegates to ImageWriter.saveToUint8Array.
-   * @param fnm - Filename (determines if compression is needed via .gz suffix)
-   * @param drawing8 - Optional Uint8Array drawing overlay
-   * @returns Promise<Uint8Array>
    */
   async saveToUint8Array(fnm, drawing8 = null) {
     return saveToUint8Array(this, fnm, drawing8);
@@ -28737,9 +29052,6 @@ var NVImage = class _NVImage {
   /**
    * save image as NIfTI volume and trigger download.
    * Delegates to ImageWriter.saveToDisk.
-   * @param fnm - Filename for download. If empty, returns data without download.
-   * @param drawing8 - Optional Uint8Array drawing overlay
-   * @returns Promise<Uint8Array>
    */
   async saveToDisk(fnm = "", drawing8 = null) {
     return saveToDisk(this, fnm, drawing8);
@@ -28945,7 +29257,6 @@ var NVImage = class _NVImage {
   }
   /**
    * factory function to load and return a new NVImage instance from a given URL
-   * @returns  NVImage instance
    */
   static async loadFromUrl({
     url = "",
@@ -29320,45 +29631,29 @@ var NVImage = class _NVImage {
   }
   /**
    * read a 3D slab of voxels from a volume
-   * @param voxStart - first row, column and slice (RAS order) for selection
-   * @param voxEnd - final row, column and slice (RAS order) for selection
-   * @param dataType - array data type. Options: 'same' (default), 'uint8', 'float32', 'scaled', 'normalized', 'windowed'
-   * @returns the an array where ret[0] is the voxel values and ret[1] is dimension of selection
-   * @see {@link https://niivue.github.io/niivue/features/slab_selection.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/slab_selection.html | live demo usage}
    */
   /**
    * read a 3D slab of voxels from a volume, specified in RAS coordinates.
    * Delegates to VolumeUtils.getVolumeData.
-   * @param voxStart - first row, column and slice (RAS order) for selection
-   * @param voxEnd - final row, column and slice (RAS order) for selection
-   * @param dataType - array data type. Options: 'same' (default), 'uint8', 'float32', 'scaled', 'normalized', 'windowed'
-   * @returns the an array where ret[0] is the voxel values and ret[1] is dimension of selection
    */
   getVolumeData(voxStart = [-1, 0, 0], voxEnd = [0, 0, 0], dataType = "same") {
     return getVolumeData(this, voxStart, voxEnd, dataType);
   }
   /**
    * write a 3D slab of voxels from a volume
-   * @param voxStart - first row, column and slice (RAS order) for selection
-   * @param voxEnd - final row, column and slice (RAS order) for selection
-   * @param img - array of voxel values to insert (RAS order)
-   * @see {@link https://niivue.github.io/niivue/features/slab_selection.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/slab_selection.html | live demo usage}
    */
   /**
    * write a 3D slab of voxels from a volume, specified in RAS coordinates.
    * Delegates to VolumeUtils.setVolumeData.
    * Input slabData is assumed to be in the correct raw data type for the target image.
-   * @param voxStart - first row, column and slice (RAS order) for selection
-   * @param voxEnd - final row, column and slice (RAS order) for selection
-   * @param img - array of voxel values to insert (RAS order, raw data type)
    */
   setVolumeData(voxStart = [-1, 0, 0], voxEnd = [0, 0, 0], img = new Uint8Array()) {
     setVolumeData(this, voxStart, voxEnd, img);
   }
   /**
    * factory function to load and return a new NVImage instance from a base64 encoded string
-   *
-   * @returns NVImage instance
    * @example
    * myImage = NVImage.loadFromBase64('SomeBase64String')
    */
@@ -29426,7 +29721,6 @@ var NVImage = class _NVImage {
   }
   /**
    * make a clone of a NVImage instance and return a new NVImage
-   * @returns NVImage instance
    * @example
    * myImage = NVImage.loadFromFile(SomeFileObject) // files can be from dialogs or drag and drop
    * clonedImage = myImage.clone()
@@ -29473,9 +29767,6 @@ var NVImage = class _NVImage {
   }
   /**
    * a factory function to make a zero filled image given a NVImage as a reference
-   * @param nvImage - an existing NVImage as a reference
-   * @param dataType - the output data type. Options: 'same', 'uint8'
-   * @returns new NVImage filled with zeros for the image data
    * @example
    * myImage = NVImage.loadFromFile(SomeFileObject) // files can be from dialogs or drag and drop
    * newZeroImage = NVImage.zerosLike(myImage)
@@ -29498,12 +29789,6 @@ var NVImage = class _NVImage {
   /**
    * Returns voxel intensity at specific native coordinates.
    * Delegates to VolumeUtils.getValue.
-   * @param x - Native X coordinate (0-indexed)
-   * @param y - Native Y coordinate (0-indexed)
-   * @param z - Native Z coordinate (0-indexed)
-   * @param frame4D - 4D frame index (0-indexed)
-   * @param isReadImaginary - Flag to read from imaginary data array
-   * @returns Scaled voxel intensity
    */
   getValue(x, y, z, frame4D = 0, isReadImaginary = false) {
     return getValue(this, x, y, z, frame4D, isReadImaginary);
@@ -29553,8 +29838,6 @@ var NVImage = class _NVImage {
    * Converts NVImage to NIfTI compliant byte array.
    * Handles potential re-orientation of drawing data.
    * Delegates to ImageWriter.toUint8Array.
-   * @param drawingBytes - Optional Uint8Array drawing overlay
-   * @returns Uint8Array
    */
   toUint8Array(drawingBytes = null) {
     return toUint8Array(this, drawingBytes);
@@ -29651,6 +29934,7 @@ var DRAG_MODE = /* @__PURE__ */ ((DRAG_MODE2) => {
   DRAG_MODE2[DRAG_MODE2["slicer3D"] = 4] = "slicer3D";
   DRAG_MODE2[DRAG_MODE2["callbackOnly"] = 5] = "callbackOnly";
   DRAG_MODE2[DRAG_MODE2["roiSelection"] = 6] = "roiSelection";
+  DRAG_MODE2[DRAG_MODE2["angle"] = 7] = "angle";
   return DRAG_MODE2;
 })(DRAG_MODE || {});
 var DRAG_MODE_SECONDARY = /* @__PURE__ */ ((DRAG_MODE_SECONDARY2) => {
@@ -29661,6 +29945,7 @@ var DRAG_MODE_SECONDARY = /* @__PURE__ */ ((DRAG_MODE_SECONDARY2) => {
   DRAG_MODE_SECONDARY2[DRAG_MODE_SECONDARY2["slicer3D"] = 4] = "slicer3D";
   DRAG_MODE_SECONDARY2[DRAG_MODE_SECONDARY2["callbackOnly"] = 5] = "callbackOnly";
   DRAG_MODE_SECONDARY2[DRAG_MODE_SECONDARY2["roiSelection"] = 6] = "roiSelection";
+  DRAG_MODE_SECONDARY2[DRAG_MODE_SECONDARY2["angle"] = 7] = "angle";
   return DRAG_MODE_SECONDARY2;
 })(DRAG_MODE_SECONDARY || {});
 var DRAG_MODE_PRIMARY = /* @__PURE__ */ ((DRAG_MODE_PRIMARY2) => {
@@ -29675,7 +29960,9 @@ var COLORMAP_TYPE = /* @__PURE__ */ ((COLORMAP_TYPE2) => {
   return COLORMAP_TYPE2;
 })(COLORMAP_TYPE || {});
 var DEFAULT_OPTIONS = {
-  textHeight: 0.06,
+  textHeight: -1,
+  fontSizeScaling: 0.4,
+  fontMinPx: 13,
   colorbarHeight: 0.05,
   colorbarWidth: -1,
   // automatic (full width)
@@ -29705,6 +29992,7 @@ var DEFAULT_OPTIONS = {
   isNearestInterpolation: false,
   isResizeCanvas: true,
   atlasOutline: 0,
+  atlasActiveIndex: 0,
   isRuler: false,
   isColorbar: false,
   isOrientCube: false,
@@ -29784,7 +30072,7 @@ var DEFAULT_OPTIONS = {
   // red
   measureLineColor: [1, 0, 0, 1],
   // red
-  measureTextHeight: 0.03,
+  measureTextHeight: 0.06,
   isAlphaClipDark: false,
   gradientOrder: 1,
   gradientOpacity: 0,
@@ -29837,6 +30125,8 @@ var NVDocument = class _NVDocument {
     __publicField(this, "drawBitmap", null);
     __publicField(this, "imageOptionsMap", /* @__PURE__ */ new Map());
     __publicField(this, "meshOptionsMap", /* @__PURE__ */ new Map());
+    __publicField(this, "_optsProxy", null);
+    __publicField(this, "_optsChangeCallback", null);
     this.scene = {
       onAzimuthElevationChange: () => {
       },
@@ -29956,13 +30246,17 @@ var NVDocument = class _NVDocument {
    * Gets the options of the {@link Niivue} instance
    */
   get opts() {
-    return this.data.opts;
+    if (!this._optsProxy) {
+      this._createOptsProxy();
+    }
+    return this._optsProxy;
   }
   /**
    * Sets the options of the {@link Niivue} instance
    */
   set opts(opts) {
     this.data.opts = { ...opts };
+    this._optsProxy = null;
   }
   /**
    * Gets the 3D labels of the {@link Niivue} instance
@@ -30331,6 +30625,41 @@ var NVDocument = class _NVDocument {
     document2.scene.sceneData = { ...INITIAL_SCENE_DATA, ...data.sceneData };
     _NVDocument.deserializeMeshDataObjects(document2);
     return document2;
+  }
+  /**
+   * Sets the callback function to be called when opts properties change
+   */
+  setOptsChangeCallback(callback) {
+    this._optsChangeCallback = callback;
+    this._optsProxy = null;
+  }
+  /**
+   * Removes the opts change callback
+   */
+  removeOptsChangeCallback() {
+    this._optsChangeCallback = null;
+    this._optsProxy = null;
+  }
+  /**
+   * Creates a Proxy wrapper around the opts object to detect changes
+   */
+  _createOptsProxy() {
+    const target = this.data.opts;
+    this._optsProxy = new Proxy(target, {
+      set: (obj, prop, value) => {
+        const oldValue = obj[prop];
+        if (oldValue !== value) {
+          obj[prop] = value;
+          if (this._optsChangeCallback && typeof prop === "string" && prop in DEFAULT_OPTIONS) {
+            this._optsChangeCallback(prop, value, oldValue);
+          }
+        }
+        return true;
+      },
+      get: (obj, prop) => {
+        return obj[prop];
+      }
+    });
   }
 };
 
@@ -31364,21 +31693,41 @@ var NVMesh3 = class _NVMesh {
             for (let j = 0; j < nLabel; j++) {
               const rgba = Array.from(lut2.slice(j * 4, j * 4 + 4)).map((v) => v / 255);
               const labelName = layer.colormapLabel.labels[j];
+              const xyzMM = [0, 0, 0];
+              let count = 0;
+              for (let i2 = 0; i2 < nvtx; i2++) {
+                if (layer.values[i2] === j) {
+                  const idx = i2 * 3;
+                  xyzMM[0] += this.pts[idx];
+                  xyzMM[1] += this.pts[idx + 1];
+                  xyzMM[2] += this.pts[idx + 2];
+                  count++;
+                }
+              }
+              if (count > 0) {
+                xyzMM[0] /= count;
+                xyzMM[1] /= count;
+                xyzMM[2] /= count;
+              }
               if (rgba[3] === 0 || !labelName || // handles empty string, null, undefined
               labelName.startsWith("_")) {
                 continue;
               }
               rgba[3] = 1;
-              const label = new NVLabel3D(labelName, {
-                textColor: rgba,
-                bulletScale: 1,
-                bulletColor: rgba,
-                lineWidth: 0,
-                lineColor: rgba,
-                textScale: 1,
-                textAlignment: "left" /* LEFT */,
-                lineTerminator: "none" /* NONE */
-              });
+              const label = new NVLabel3D(
+                labelName,
+                {
+                  textColor: rgba,
+                  bulletScale: 1,
+                  bulletColor: rgba,
+                  lineWidth: 0,
+                  lineColor: rgba,
+                  textScale: 1,
+                  textAlignment: "left" /* LEFT */,
+                  lineTerminator: "none" /* NONE */
+                },
+                xyzMM
+              );
               layer.labels.push(label);
               log.debug("label for mesh layer:", label);
             }
@@ -34373,6 +34722,7 @@ function intensityRaw2Scaled(hdr, raw) {
 }
 
 // src/niivue/index.ts
+var { version } = package_default;
 var MESH_EXTENSIONS = [
   "ASC",
   "BYU",
@@ -34464,6 +34814,8 @@ var Niivue = class {
     __publicField(this, "gradientTexture", null);
     // 3D texture for volume rendering lighting
     __publicField(this, "gradientTextureAmount", 0);
+    __publicField(this, "useCustomGradientTexture", false);
+    // flag to indicate if a custom gradient texture is used
     __publicField(this, "renderGradientValues", false);
     __publicField(this, "drawTexture", null);
     // the GPU memory storage of the drawing
@@ -34509,6 +34861,7 @@ var Niivue = class {
     __publicField(this, "pickingMeshShader");
     __publicField(this, "pickingImageShader");
     __publicField(this, "colorbarShader");
+    __publicField(this, "customSliceShader", null);
     __publicField(this, "fontShader", null);
     __publicField(this, "fiberShader");
     __publicField(this, "fontTexture", null);
@@ -34527,6 +34880,7 @@ var Niivue = class {
     __publicField(this, "orientShaderI", null);
     __publicField(this, "orientShaderF", null);
     __publicField(this, "orientShaderRGBU", null);
+    __publicField(this, "orientShaderSPARQ", null);
     __publicField(this, "surfaceShader", null);
     __publicField(this, "blurShader", null);
     __publicField(this, "sobelBlurShader", null);
@@ -34542,6 +34896,8 @@ var Niivue = class {
     // "/fonts/Roboto-Regular.json";
     __publicField(this, "fontMetrics");
     __publicField(this, "fontMets", null);
+    __publicField(this, "fontPx", 12);
+    __publicField(this, "legendFontScaling", 1);
     __publicField(this, "backgroundMasksOverlays", 0);
     __publicField(this, "overlayOutlineWidth", 0);
     // float, 0 for none
@@ -34594,7 +34950,9 @@ var Niivue = class {
       lastTwoTouchDistance: 0,
       multiTouchGesture: false,
       windowX: 0,
-      windowY: 0
+      windowY: 0,
+      angleFirstLine: [0, 0, 0, 0],
+      angleState: "none"
     });
     __publicField(this, "back", null);
     // base layer; defines image space to work in. Defined as this.volumes[0] in Niivue.loadVolumes
@@ -34694,6 +35052,7 @@ var Niivue = class {
     __publicField(this, "dragModes", {
       contrast: 1 /* contrast */,
       measurement: 2 /* measurement */,
+      angle: 7 /* angle */,
       none: 0 /* none */,
       pan: 3 /* pan */,
       slicer3D: 4 /* slicer3D */,
@@ -34906,6 +35265,14 @@ var Niivue = class {
      */
     __publicField(this, "onDocumentLoaded", () => {
     });
+    /**
+     * Callback for when any configuration option changes.
+     * @param propertyName - The name of the option that changed.
+     * @param newValue - The new value of the option.
+     * @param oldValue - The previous value of the option.
+     */
+    __publicField(this, "onOptsChange", () => {
+    });
     __publicField(this, "document", new NVDocument());
     __publicField(this, "mediaUrlMap", /* @__PURE__ */ new Map());
     __publicField(this, "initialized", false);
@@ -34932,22 +35299,38 @@ var Niivue = class {
       this.thumbnailVisible = true;
     }
     log.setLogLevel(this.opts.logLevel);
+    this.document.setOptsChangeCallback((propertyName, newValue, oldValue) => {
+      this.onOptsChange(propertyName, newValue, oldValue);
+    });
   }
+  /** Get the current scene configuration. */
   get scene() {
     return this.document.scene;
   }
+  /** Get the current visualization options. */
   get opts() {
     return this.document.opts;
   }
+  /** Get the slice mosaic layout string. */
   get sliceMosaicString() {
     return this.document.opts.sliceMosaicString || "";
   }
+  /** Set the slice mosaic layout string. */
   set sliceMosaicString(newSliceMosaicString) {
     this.document.opts.sliceMosaicString = newSliceMosaicString;
   }
+  /**
+   * Get whether voxels below minimum intensity are drawn as dark or transparent.
+   * @returns {boolean} True if dark voxels are opaque, false if transparent.
+   */
   get isAlphaClipDark() {
     return this.document.opts.isAlphaClipDark;
   }
+  /**
+   * Set whether voxels below minimum intensity are drawn as dark or transparent.
+   * @param {boolean} newVal - True to make dark voxels opaque, false for transparent.
+   * @see {@link https://niivue.com/demos/features/segment.html | live demo usage}
+   */
   set isAlphaClipDark(newVal) {
     this.document.opts.isAlphaClipDark = newVal;
   }
@@ -34986,6 +35369,7 @@ var Niivue = class {
       this.canvas.removeEventListener("keyup", this.keyUpListener.bind(this));
       this.canvas.removeEventListener("keydown", this.keyDownListener.bind(this));
     }
+    this.document.removeOptsChangeCallback();
   }
   get volumes() {
     return this.document.volumes;
@@ -35015,7 +35399,7 @@ var Niivue = class {
    * save webgl2 canvas as png format bitmap
    * @param filename - filename for screen capture
    * @example niivue.saveScene('test.png');
-   * @see {@link https://niivue.github.io/niivue/features/ui.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/ui.html | live demo usage}
    */
   async saveScene(filename = "niivue.png") {
     function saveBlob(blob, name) {
@@ -35050,7 +35434,7 @@ var Niivue = class {
    * @param isAntiAlias - determines if anti-aliasing is requested (if not specified, AA usage depends on hardware)
    * @example niivue = new Niivue().attachTo('gl')
    * @example await niivue.attachTo('gl')
-   * @see {@link https://niivue.github.io/niivue/features/basic.multiplanar.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/basic.multiplanar.html | live demo usage}
    */
   async attachTo(id, isAntiAlias = null) {
     await this.attachToCanvas(document.getElementById(id), isAntiAlias);
@@ -35063,6 +35447,7 @@ var Niivue = class {
    * @example
    * niivue = new Niivue()
    * await niivue.attachToCanvas(document.getElementById(id))
+   * @see {@link https://niivue.com/demos/features/dsistudio.html | live demo usage}
    */
   async attachToCanvas(canvas, isAntiAlias = null) {
     this.canvas = canvas;
@@ -35122,7 +35507,7 @@ var Niivue = class {
    * niivue2 = new Niivue()
    * niivue2.syncWith(niivue1)
    * @deprecated use broadcastTo instead
-   * @see {@link https://niivue.github.io/niivue/features/sync.mesh.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/sync.mesh.html | live demo usage}
    */
   syncWith(otherNV, syncOpts = { "2d": true, "3d": true }) {
     if (!(otherNV instanceof Array)) {
@@ -35140,7 +35525,7 @@ var Niivue = class {
    * niivue3 = new Niivue()
    * niivue1.broadcastTo(niivue2)
    * niivue1.broadcastTo([niivue2, niivue3])
-   * @see {@link https://niivue.github.io/niivue/features/sync.mesh.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/sync.mesh.html | live demo usage}
    */
   broadcastTo(otherNV, syncOpts = { "2d": true, "3d": true }) {
     if (!(otherNV instanceof Array)) {
@@ -35149,12 +35534,19 @@ var Niivue = class {
     this.otherNV = otherNV;
     this.syncOpts = syncOpts;
   }
+  /**
+   * Synchronizes 3D view settings (azimuth, elevation, scale) with another Niivue instance.
+   * @internal
+   */
   doSync3d(otherNV) {
     otherNV.scene.renderAzimuth = this.scene.renderAzimuth;
     otherNV.scene.renderElevation = this.scene.renderElevation;
     otherNV.scene.volScaleMultiplier = this.scene.volScaleMultiplier;
   }
-  // both crosshair and zoomPan
+  /**
+   * Synchronizes 2D crosshair position and pan settings with another Niivue instance.
+   * @internal
+   */
   doSync2d(otherNV) {
     const thisMM = this.frac2mm(this.scene.crosshairPos);
     otherNV.scene.crosshairPos = otherNV.mm2frac(thisMM);
@@ -35167,28 +35559,52 @@ var Niivue = class {
       otherNV.setGamma(thisGamma);
     }
   }
+  /**
+   * Synchronizes gamma correction setting with another Niivue instance.
+   * @internal
+   */
   doSyncZoomPan(otherNV) {
     otherNV.scene.pan2Dxyzmm = vec4_exports.clone(this.scene.pan2Dxyzmm);
   }
+  /**
+   * Synchronizes crosshair position with another Niivue instance.
+   * @internal
+   */
   doSyncCrosshair(otherNV) {
     const thisMM = this.frac2mm(this.scene.crosshairPos);
     otherNV.scene.crosshairPos = otherNV.mm2frac(thisMM);
   }
+  /**
+   * Synchronizes cal_min with another Niivue instance, updating GPU volume only if needed.
+   * @internal
+   */
   doSyncCalMin(otherNV) {
     if (this.volumes[0].cal_min !== otherNV.volumes[0].cal_min) {
       otherNV.volumes[0].cal_min = this.volumes[0].cal_min;
       otherNV.updateGLVolume();
     }
   }
+  /**
+   * Synchronizes cal_max with another Niivue instance, updating GPU volume only if needed.
+   * @internal
+   */
   doSyncCalMax(otherNV) {
     if (this.volumes[0].cal_max !== otherNV.volumes[0].cal_max) {
       otherNV.volumes[0].cal_max = this.volumes[0].cal_max;
       otherNV.updateGLVolume();
     }
   }
+  /**
+   * Synchronizes slice view type with another Niivue instance.
+   * @internal
+   */
   doSyncSliceType(otherNV) {
     otherNV.setSliceType(this.opts.sliceType);
   }
+  /**
+   * Synchronizes clip plane settings with another Niivue instance.
+   * @internal
+   */
   doSyncClipPlane(otherNV) {
     otherNV.setClipPlane(this.scene.clipPlaneDepthAziElev);
   }
@@ -35244,6 +35660,7 @@ var Niivue = class {
     }
   }
   /** Not documented publicly for now
+   * @internal
    * test if two arrays have equal values for each element
    * @param a - the first array
    * @param b - the second array
@@ -35253,6 +35670,33 @@ var Niivue = class {
    */
   arrayEquals(a, b) {
     return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((val, index) => val === b[index]);
+  }
+  /**
+   * @internal
+   * Compute point size for screen text that scales with resolution and screen size.
+   * - Keeps physical font size consistent across different DPIs.
+   * - Uses fontSizeScaling to scale with canvas size above a reference threshold.
+   */
+  textSizePoints() {
+    if (this.opts.textHeight >= 0) {
+      log.warn(`textHeight is deprecated (use fontMinPx and fontSizeScaling)`);
+      this.opts.fontMinPx = this.opts.textHeight * 217;
+      this.opts.fontSizeScaling = 0.4;
+      this.opts.textHeight = -1;
+    }
+    const dpi = this.uiData.dpr || 1;
+    const basePointSize = this.opts.fontMinPx;
+    const screenWidthPts = this.gl.canvas.width / dpi;
+    const screenHeightPts = this.gl.canvas.height / dpi;
+    const screenAreaPts = screenWidthPts * screenHeightPts;
+    const refAreaPts = 800 * 600;
+    const normalizedArea = Math.max(screenAreaPts / refAreaPts, 1);
+    const scale6 = Math.pow(normalizedArea, this.opts.fontSizeScaling);
+    const fontPx = basePointSize * scale6 * dpi;
+    this.fontPx = fontPx;
+    log.debug(
+      `${screenWidthPts.toFixed(0)}x${screenHeightPts.toFixed(0)} pts (dpi=${dpi}) => areaScale=${normalizedArea.toFixed(2)}, scale=${scale6.toFixed(2)}, minPx=${this.opts.fontMinPx} fontScale=${this.opts.fontSizeScaling} fontPx=${fontPx.toFixed(2)}`
+    );
   }
   /**
    * callback function to handle resize window events, redraws the scene.
@@ -35288,13 +35732,9 @@ var Niivue = class {
       this.canvas.height = this.canvas.offsetHeight * this.uiData.dpr;
     }
     this.gl.viewport(0, 0, this.gl.canvas.width, this.gl.canvas.height);
+    this.textSizePoints();
     this.drawScene();
   }
-  /* Not included in public docs
-   * The following two functions are to address offset issues
-   * https://stackoverflow.com/questions/42309715/how-to-correctly-pass-mouse-coordinates-to-webgl
-   * note:  no test yet
-   */
   /**
    * callback to handle mouse move events relative to the canvas
    * @internal
@@ -35311,32 +35751,36 @@ var Niivue = class {
       y: event.clientY - rect.top
     };
   }
-  // not included in public docs
-  // assumes target or event.target is canvas
-  // note: no test yet
+  /**
+   * Returns mouse position relative to the canvas, excluding padding and borders.
+   * @internal
+   */
   getNoPaddingNoBorderCanvasRelativeMousePosition(event, target) {
     target = target || event.target;
     const pos = this.getRelativeMousePosition(event, target);
     return pos;
   }
-  // not included in public docs
-  // handler for context menu (right click)
-  // here, we disable the normal context menu so that
-  // we can use some custom right click events
-  // note: no test yet
+  /**
+   * Disables the default context menu to allow custom right-click behavior.
+   * @internal
+   */
   mouseContextMenuListener(e) {
     e.preventDefault();
   }
-  // not included in public docs
-  // handler for all mouse button presses
-  // note: no test yet
+  /**
+   * Handles mouse down events for interaction, segmentation, and connectome label selection.
+   * Routes to appropriate button handler based on click type.
+   * @internal
+   */
   mouseDownListener(e) {
     e.preventDefault();
     this.drawPenLocation = [NaN, NaN, NaN];
     this.drawPenAxCorSag = -1;
     this.uiData.mousedown = true;
-    this.setDragStart(0, 0);
-    this.setDragEnd(0, 0);
+    if (!(this.opts.dragMode === 7 /* angle */ && this.uiData.angleState === "drawing_second_line")) {
+      this.setDragStart(0, 0);
+      this.setDragEnd(0, 0);
+    }
     log.debug("mouse down");
     log.debug(e);
     const pos = this.getNoPaddingNoBorderCanvasRelativeMousePosition(e, this.gl.canvas);
@@ -35355,6 +35799,12 @@ var Niivue = class {
       }
       for (const mesh of this.meshes) {
         if (mesh.type !== "connectome" /* CONNECTOME */) {
+          if (Array.isArray(label.points) && label.points.length === 3 && label.points.every(Number.isFinite)) {
+            const [x2, y2, z] = label.points;
+            this.scene.crosshairPos = this.mm2frac([x2, y2, z]);
+            this.updateGLVolume();
+            this.drawScene();
+          }
           continue;
         }
         for (const node of mesh.nodes) {
@@ -35381,9 +35831,10 @@ var Niivue = class {
       this.mouseCenterButtonHandler(e);
     }
   }
-  // not included in public docs
-  // handler for mouse left button down
-  // note: no test yet
+  /**
+   * Handles left mouse button actions for crosshair or windowing mode.
+   * @internal
+   */
   mouseLeftButtonHandler(e) {
     if (e.ctrlKey || this.opts.dragModePrimary === 0 /* crosshair */) {
       const pos = this.getNoPaddingNoBorderCanvasRelativeMousePosition(e, this.gl.canvas);
@@ -35394,9 +35845,10 @@ var Niivue = class {
       this.uiData.windowY = e.y;
     }
   }
-  // not included in public docs
-  // handler for mouse center button down
-  // note: no test yet
+  /**
+   * Handles center mouse button drag to initiate 2D panning or clip plane adjustment.
+   * @internal
+   */
   mouseCenterButtonHandler(e) {
     const pos = this.getNoPaddingNoBorderCanvasRelativeMousePosition(e, this.gl.canvas);
     this.mousePos = [pos.x * this.uiData.dpr, pos.y * this.uiData.dpr];
@@ -35410,14 +35862,27 @@ var Niivue = class {
     this.uiData.isDragging = true;
     this.uiData.dragClipPlaneStartDepthAziElev = this.scene.clipPlaneDepthAziElev;
   }
-  // not included in public docs
-  // handler for mouse right button down
-  // note: no test yet
+  /**
+   * Handles right mouse button drag to enable 2D panning or clip plane control.
+   * @internal
+   */
   mouseRightButtonHandler(e) {
     const pos = this.getNoPaddingNoBorderCanvasRelativeMousePosition(e, this.gl.canvas);
     this.mousePos = [pos.x * this.uiData.dpr, pos.y * this.uiData.dpr];
     if (this.opts.dragMode === 0 /* none */) {
       return;
+    }
+    if (this.opts.dragMode === 7 /* angle */) {
+      if (this.uiData.angleState === "none") {
+        this.uiData.angleState = "drawing_first_line";
+      } else if (this.uiData.angleState === "drawing_second_line") {
+        this.uiData.angleState = "complete";
+        this.drawScene();
+        return;
+      } else if (this.uiData.angleState === "complete") {
+        this.resetAngleMeasurement();
+        this.uiData.angleState = "drawing_first_line";
+      }
     }
     this.setDragStart(pos.x, pos.y);
     if (!this.uiData.isDragging) {
@@ -35428,6 +35893,7 @@ var Niivue = class {
   }
   /**
    * calculate the the min and max voxel indices from an array of two values (used in selecting intensities with the selection box)
+   * @internal
    * @param array - an array of two values
    * @returns an array of two values representing the min and max voxel indices
    */
@@ -35437,8 +35903,11 @@ var Niivue = class {
     }
     return [Math.floor(Math.min(array[0], array[1])), Math.floor(Math.max(array[0], array[1]))];
   }
-  // not included in public docs
-  // note: no test yet
+  /**
+   * Updates cal_min and cal_max based on intensity range within the drag-selected voxel region.
+   * Skips if no drag occurred, volume is missing, or selection has no variation.
+   * @internal
+   */
   calculateNewRange({ volIdx = 0 } = {}) {
     if (this.opts.sliceType === 4 /* RENDER */ && this.sliceMosaicString.length < 1) {
       return;
@@ -35499,6 +35968,10 @@ var Niivue = class {
     this.volumes[volIdx].cal_max = mxScale;
     this.onIntensityChange(this.volumes[volIdx]);
   }
+  /**
+   * Triggers a drag-release callback with voxel, mm, and tile info from the drag gesture.
+   * @internal
+   */
   generateMouseUpCallback(fracStart, fracEnd) {
     const tileStart = this.tileIndex(this.uiData.dragStart[0], this.uiData.dragStart[1]);
     const tileEnd = this.tileIndex(this.uiData.dragEnd[0], this.uiData.dragEnd[1]);
@@ -35529,9 +36002,10 @@ var Niivue = class {
       axCorSag
     });
   }
-  // not included in public docs
-  // handler for mouse button up (all buttons)
-  // note: no test yet
+  /**
+   * Handles mouse up events, finalizing drag actions, invoking callbacks, and updating contrast if needed.
+   * @internal
+   */
   mouseUpListener() {
     function isFunction(test) {
       return Object.prototype.toString.call(test).indexOf("Function") > -1;
@@ -35559,6 +36033,24 @@ var Niivue = class {
     }
     if (this.uiData.isDragging) {
       this.uiData.isDragging = false;
+      if (this.opts.dragMode === 7 /* angle */) {
+        if (this.uiData.angleState === "drawing_first_line") {
+          this.uiData.angleFirstLine = [
+            this.uiData.dragStart[0],
+            this.uiData.dragStart[1],
+            this.uiData.dragEnd[0],
+            this.uiData.dragEnd[1]
+          ];
+          this.uiData.angleState = "drawing_second_line";
+          this.uiData.isDragging = true;
+          this.drawScene();
+          return;
+        } else if (this.uiData.angleState === "drawing_second_line") {
+          this.uiData.angleState = "complete";
+          this.drawScene();
+          return;
+        }
+      }
       if (this.opts.dragMode === 5 /* callbackOnly */) {
         this.drawScene();
       }
@@ -35582,7 +36074,10 @@ var Niivue = class {
     }
     this.drawScene();
   }
-  // not included in public docs
+  /**
+   * Handles initial touch event to simulate mouse click if not in a multi-touch gesture.
+   * @internal
+   */
   checkMultitouch(e) {
     if (this.uiData.touchdown && !this.uiData.multiTouchGesture) {
       const rect = this.canvas.getBoundingClientRect();
@@ -35590,9 +36085,10 @@ var Niivue = class {
       this.mouseClick(e.touches[0].clientX - rect.left, e.touches[0].clientY - rect.top);
     }
   }
-  // not included in public docs
-  // handler for single finger touch event (like mouse down)
-  // note: no test yet
+  /**
+   * Handles touch start events, detecting double taps and preparing for gesture or contrast reset.
+   * @internal
+   */
   touchStartListener(e) {
     e.preventDefault();
     if (!this.uiData.touchTimer) {
@@ -35625,9 +36121,10 @@ var Niivue = class {
     }
     setTimeout(this.checkMultitouch.bind(this), 1, e);
   }
-  // not included in public docs
-  // handler for touchend (finger lift off screen)
-  // note: no test yet
+  /**
+   * Handles touch end events, finalizing gestures and contrast adjustments, then triggers mouse up logic.
+   * @internal
+   */
   touchEndListener(e) {
     e.preventDefault();
     this.uiData.touchdown = false;
@@ -35649,6 +36146,10 @@ var Niivue = class {
     }
     this.mouseUpListener();
   }
+  /**
+   * Adjusts window/level (cal_min and cal_max) based on mouse or touch drag direction.
+   * @internal
+   */
   windowingHandler(x, y, volIdx = 0) {
     const wx = this.uiData.windowX;
     const wy = this.uiData.windowY;
@@ -35688,8 +36189,10 @@ var Niivue = class {
     this.uiData.windowX = x;
     this.uiData.windowY = y;
   }
-  // not included in public docs
-  // handler for mouse leaving the canvas
+  /**
+   * Handles mouse leaving the canvas, resetting segmentation, drawing, and drag states.
+   * @internal
+   */
   mouseLeaveListener() {
     if (this.clickToSegmentIsGrowing) {
       log.debug("Mouse left canvas, stopping clickToSegment preview.");
@@ -35712,9 +36215,10 @@ var Niivue = class {
       this.drawScene();
     }
   }
-  // not included in public docs
-  // handler for mouse move over canvas
-  // note: no test yet
+  /**
+   * Handles mouse move events for dragging, crosshair movement, windowing, and click-to-segment preview.
+   * @internal
+   */
   mouseMoveListener(e) {
     if (this.uiData.mousedown) {
       const pos = this.getNoPaddingNoBorderCanvasRelativeMousePosition(e, this.gl.canvas);
@@ -35743,6 +36247,13 @@ var Niivue = class {
       this.drawScene();
       this.uiData.prevX = this.uiData.currX;
       this.uiData.prevY = this.uiData.currY;
+    } else if (this.opts.dragMode === 7 /* angle */ && this.uiData.angleState === "drawing_second_line") {
+      const pos = this.getNoPaddingNoBorderCanvasRelativeMousePosition(e, this.gl.canvas);
+      if (!pos) {
+        return;
+      }
+      this.setDragEnd(pos.x, pos.y);
+      this.drawScene();
     } else if (!this.uiData.mousedown && this.opts.clickToSegment) {
       const pos = this.getNoPaddingNoBorderCanvasRelativeMousePosition(e, this.gl.canvas);
       if (!pos) {
@@ -35768,10 +36279,10 @@ var Niivue = class {
       }
     }
   }
-  // not included in public docs
-  // note: should update this to accept a volume index to reset a selected volume rather than only the background (TODO)
-  // reset brightness and contrast to global min and max
-  // note: no test yet
+  /**
+   * Resets brightness and contrast to robust min/max unless in render mode or during interaction.
+   * @internal
+   */
   resetBriCon(msg = null) {
     if (this.uiData.isDragging) {
       return;
@@ -35817,21 +36328,30 @@ var Niivue = class {
     this.refreshLayers(this.volumes[0], 0);
     this.drawScene();
   }
+  /**
+   * Sets the drag start position in canvas coordinates.
+   * @internal
+   */
   setDragStart(x, y) {
     x *= this.uiData.dpr;
     y *= this.uiData.dpr;
     this.uiData.dragStart[0] = x;
     this.uiData.dragStart[1] = y;
   }
+  /**
+   * Sets the drag end position in canvas coordinates.
+   * @internal
+   */
   setDragEnd(x, y) {
     x *= this.uiData.dpr;
     y *= this.uiData.dpr;
     this.uiData.dragEnd[0] = x;
     this.uiData.dragEnd[1] = y;
   }
-  // not included in public docs
-  // handler for touch move (moving finger on screen)
-  // note: no test yet
+  /**
+   * Handles touch movement for crosshair, windowing, and pinch-to-zoom interactions.
+   * @internal
+   */
   touchMoveListener(e) {
     if (this.uiData.touchdown && e.touches.length < 2) {
       const rect = this.canvas.getBoundingClientRect();
@@ -35860,7 +36380,10 @@ var Niivue = class {
       this.handlePinchZoom(e);
     }
   }
-  // not included in public docs
+  /**
+   * Handles pinch-to-zoom gestures for scrolling 2D slices.
+   * @internal
+   */
   handlePinchZoom(e) {
     if (e.targetTouches.length === 2 && e.changedTouches.length === 2) {
       const dist4 = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
@@ -35874,8 +36397,10 @@ var Niivue = class {
       this.uiData.lastTwoTouchDistance = dist4;
     }
   }
-  // not included in public docs
-  // handler for keyboard shortcuts
+  /**
+   * Handles keyboard shortcuts for toggling clip planes and slice view modes with debounce logic.
+   * @internal
+   */
   keyUpListener(e) {
     if (e.code === this.opts.clipPlaneHotKey) {
       const now = (/* @__PURE__ */ new Date()).getTime();
@@ -35917,6 +36442,10 @@ var Niivue = class {
       }
     }
   }
+  /**
+   * Handles key down events for navigation, rendering controls, slice movement, and mode switching.
+   * @internal
+   */
   keyDownListener(e) {
     if (e.code === "KeyH" && this.opts.sliceType === 4 /* RENDER */) {
       this.setRenderAzimuthElevation(this.scene.renderAzimuth - 1, this.scene.renderElevation);
@@ -35952,9 +36481,10 @@ var Niivue = class {
       alert(`NIIVUE VERSION: ${version}`);
     }
   }
-  // not included in public docs
-  // handler for scroll wheel events (slice scrolling)
-  // note: no test yet
+  /**
+   * Handles scroll wheel events for slice scrolling, ROI box resizing, zooming, or segmentation thresholding.
+   * @internal
+   */
   wheelListener(e) {
     if (this.thumbnailVisible) {
       return;
@@ -36042,10 +36572,11 @@ var Niivue = class {
     }
     this.sliceScroll2D(scrollAmount, x, y);
   }
-  // not included in public docs
-  // setup interactions with the canvas. Mouse clicks and touches
-  // note: no test yet
-  // note: any event listeners registered here should also be removed in `cleanup()`
+  /**
+   * Registers all mouse, touch, keyboard, and drag event listeners for canvas interaction.
+   * n.b. any event listeners registered here should also be removed in `cleanup()`
+   * @internal
+   */
   registerInteractions() {
     if (!this.canvas) {
       throw new Error("canvas undefined");
@@ -36073,17 +36604,26 @@ var Niivue = class {
     this.canvas.addEventListener("keyup", this.keyUpListener.bind(this), false);
     this.canvas.addEventListener("keydown", this.keyDownListener.bind(this), false);
   }
-  // not included in public docs
+  /**
+   * Prevents default behavior when a dragged item enters the canvas.
+   * @internal
+   */
   dragEnterListener(e) {
     e.stopPropagation();
     e.preventDefault();
   }
-  // not included in public docs
+  /**
+   * Prevents default behavior when a dragged item is over the canvas.
+   * @internal
+   */
   dragOverListener(e) {
     e.stopPropagation();
     e.preventDefault();
   }
-  // not included in public docs
+  /**
+   * Extracts and normalizes the file extension, handling special cases like .gz and .cbor.
+   * @internal
+   */
   getFileExt(fullname, upperCase = true) {
     log.debug("fullname: ", fullname);
     const re = /(?:\.([^.]+))?$/;
@@ -36102,7 +36642,7 @@ var Niivue = class {
   }
   /**
    * Add an image and notify subscribers
-   * @see {@link https://niivue.github.io/niivue/features/document.3d.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/document.3d.html | live demo usage}
    */
   async addVolumeFromUrl(imageOptions) {
     const volume = await NVImage.loadFromUrl(imageOptions);
@@ -36174,7 +36714,8 @@ var Niivue = class {
     return volumes;
   }
   /**
-   * Find media by url
+   * Returns the media object associated with the given URL, if any.
+   * @internal
    */
   getMediaByUrl(url) {
     return [...this.mediaUrlMap.entries()].filter((v) => v[1] === url).map((v) => v[0]).pop();
@@ -36182,7 +36723,7 @@ var Niivue = class {
   /**
    * Remove volume by url
    * @param url - Volume added by url to remove
-   * @see {@link https://niivue.github.io/niivue/features/document.3d.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/document.3d.html | live demo usage}
    */
   removeVolumeByUrl(url) {
     const volume = this.getMediaByUrl(url);
@@ -36192,6 +36733,11 @@ var Niivue = class {
       throw new Error("No volume with URL present");
     }
   }
+  /**
+   * Recursively traverses a file tree, populating file paths for directory uploads.
+   * Adds `_webkitRelativePath` to each file for compatibility with tools like dcm2niix.
+   * @internal
+   */
   async traverseFileTree(item, path = "", fileArray) {
     return new Promise((resolve2) => {
       if (item.isFile) {
@@ -36222,6 +36768,11 @@ var Niivue = class {
       }
     });
   }
+  /**
+   * Recursively reads a directory and logs the File objects contained within.
+   * Used for processing dropped folders via drag-and-drop.
+   * @internal
+   */
   readDirectory(directory) {
     const reader = directory.createReader();
     let allEntiresInDir = [];
@@ -36256,6 +36807,7 @@ var Niivue = class {
   /**
    * Returns boolean: true if filename ends with mesh extension (TRK, pial, etc)
    * @param url - filename
+   * @internal
    */
   isMeshExt(url) {
     const ext = this.getFileExt(url);
@@ -36281,8 +36833,10 @@ var Niivue = class {
     await this.addVolumeFromUrl(imageOptions);
   }
   /**
-   * Load a mesh or image from a file object
-   * @param file - File object
+   * Load a mesh or image volume from a File object
+   * @param file - File object selected by the user (e.g. from an HTML input element)
+   * @returns a Promise that resolves when the file has been loaded and added to the scene
+   * @see {@link https://niivue.com/demos/features/selectfont.html | live demo usage}
    */
   async loadFromFile(file) {
     const ext = this.getFileExt(file.name);
@@ -36299,42 +36853,32 @@ var Niivue = class {
       this.addVolume(volume);
     });
   }
-  /* useLoader
-  
-    registers an external file loader for niivue to use when reading files.
-  
-    the loader must return an array buffer of the file contents for niivue
-    to parse and the extension of the file so niivue can infer the file type to load.
-  
-    example:
-  
-    const myCustomLoader = (File) => {
-      // ... do parsing here ...
-      return {
-        arrayBuffer: ArrayBuffer,
-        fileExt: 'iwi.cbor',
-        positions: Float32Array | [], // allows for mesh loading to mz3
-        indices: Uint32Array | [], // allows for mesh loading to mz3
-      }
-  
-    nv.useLoader({
-      loader: myCustomLoader,
-      fileExt: 'iwi.cbor',
-      toExt: 'nii'
-    })
-  
-    */
-  // interface LoaderMap {
-  //   [key: string]: {
-  //     loader: LoaderFunction;
-  //     toExt: string;
-  //   };
-  // }
-  // Example usage:
-  // const loaderMap: LoaderMap = {
-  //   'TXT': { loader: (file: File) => file.text(), toExt: 'json' }
-  // };
-  // loader can either be a function that takes a file or ArrayBuffer, or the async version of that.
+  /**
+   * Registers a custom external file loader for handling specific file types in Niivue.
+   *
+   * This method allows you to define how certain file extensions are handled when loaded into Niivue.
+   * The provided `loader` function should return an object containing an `ArrayBuffer` of the file's contents
+   * and the file extension (used for inferring how Niivue should process the data).
+   *
+   * Optionally, `positions` and `indices` can be returned to support loading mesh data (e.g. `.mz3` format).
+   *
+   * @example
+   * const myCustomLoader = async (file) => {
+   *   const arrayBuffer = await file.arrayBuffer()
+   *   return {
+   *     arrayBuffer,
+   *     fileExt: 'iwi.cbor',
+   *     positions: new Float32Array(...),
+   *     indices: new Uint32Array(...)
+   *   }
+   * }
+   *
+   * nv.useLoader(myCustomLoader, 'iwi.cbor', 'nii')
+   *
+   * @param loader - A function that accepts a `File` or `ArrayBuffer` and returns an object with `arrayBuffer` and `fileExt` properties. May also return `positions` and `indices` for meshes.
+   * @param fileExt - The original file extension (e.g. 'iwi.cbor') to associate with this loader.
+   * @param toExt - The target file extension Niivue should treat the file as (e.g. 'nii' or 'mz3').
+   */
   useLoader(loader, fileExt, toExt) {
     this.loaders = {
       ...this.loaders,
@@ -36344,9 +36888,15 @@ var Niivue = class {
       }
     };
   }
+  /**
+   * Set a custom loader for handling DICOM files.
+   */
   useDicomLoader(loader) {
     this.dicomLoader = loader;
   }
+  /**
+   * Get the currently assigned DICOM loader.
+   */
   getDicomLoader() {
     return this.dicomLoader;
   }
@@ -36362,7 +36912,12 @@ var Niivue = class {
   //     },
   //   }
   // }
-  // not included in public docs
+  /**
+   * Handles file and URL drag-and-drop events on the canvas.
+   * Supports loading of volumes, meshes, NVD documents, and DICOM directories.
+   * Honors modifier keys (e.g., Shift to replace, Alt for drawing overlays).
+   * @internal
+   */
   async dropListener(e) {
     e.stopPropagation();
     e.preventDefault();
@@ -36552,7 +37107,7 @@ var Niivue = class {
    * insert a gap between slices of a mutliplanar view.
    * @param pixels - spacing between tiles of multiplanar view
    * @example niivue.setMultiplanarPadPixels(4)
-   * @see {@link https://niivue.github.io/niivue/features/atlas.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/atlas.html | live demo usage}
    */
   setMultiplanarPadPixels(pixels) {
     this.opts.multiplanarPadPixels = pixels;
@@ -36562,7 +37117,7 @@ var Niivue = class {
    * control placement of 2D slices.
    * @param layout - AUTO: 0, COLUMN: 1, GRID: 2, ROW: 3,
    * @example niivue.setMultiplanarLayout(2)
-   * @see {@link https://niivue.github.io/niivue/features/layout.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/layout.html | live demo usage}
    */
   setMultiplanarLayout(layout) {
     if (typeof layout === "string") {
@@ -36575,16 +37130,17 @@ var Niivue = class {
    * determine if text appears at corner (true) or sides of 2D slice.
    * @param isCornerOrientationText - controls position of text
    * @example niivue.setCornerOrientationText(true)
-   * @see {@link https://niivue.github.io/niivue/features/worldspace2.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/worldspace2.html | live demo usage}
    */
   setCornerOrientationText(isCornerOrientationText) {
     this.opts.isCornerOrientationText = isCornerOrientationText;
     this.updateGLVolume();
   }
   /**
-   * determine if orientation text appears in 2D slice view.
-   * @param isOrientationTextVisible - controls position of text
+   * Show or hide orientation labels (e.g., L/R, A/P) in 2D slice views
+   * @param isOrientationTextVisible - whether orientation text should be displayed
    * @example niivue.setIsOrientationTextVisible(false)
+   * @see {@link https://niivue.com/demos/features/basic.multiplanar.html | live demo usage}
    */
   setIsOrientationTextVisible(isOrientationTextVisible) {
     this.opts.isOrientationTextVisible = isOrientationTextVisible;
@@ -36594,7 +37150,7 @@ var Niivue = class {
    * determine proportion of screen real estate devoted to rendering in multiplanar view.
    * @param fraction - proportion of screen devoted to primary (hero) image (0 to disable)
    * @example niivue.setHeroImage(0.5)
-   * @see {@link https://niivue.github.io/niivue/features/layout.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/layout.html | live demo usage}
    */
   setHeroImage(fraction) {
     this.opts.heroImageFraction = fraction;
@@ -36663,7 +37219,7 @@ var Niivue = class {
    * control whether 2D slices use radiological or neurological convention.
    * @param isRadiologicalConvention - new display convention
    * @example niivue.setRadiologicalConvention(true)
-   * @see {@link https://niivue.github.io/niivue/features/worldspace.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/worldspace.html | live demo usage}
    */
   setRadiologicalConvention(isRadiologicalConvention) {
     this.opts.isRadiologicalConvention = isRadiologicalConvention;
@@ -36674,7 +37230,7 @@ var Niivue = class {
    * @param options - @see NiiVueOptions
    * @param resetBriCon - also reset contrast (default false).
    * @example niivue.nv1.setDefaults(opts, true);
-   * @see {@link https://niivue.github.io/niivue/features/connectome.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/connectome.html | live demo usage}
    */
   setDefaults(options = {}, resetBriCon = false) {
     this.document.opts = { ...DEFAULT_OPTIONS };
@@ -36699,7 +37255,7 @@ var Niivue = class {
    * Limit visibility of mesh in front of a 2D image. Requires world-space mode.
    * @param meshThicknessOn2D - distance from voxels for clipping mesh. Use Infinity to show entire mesh or 0.0 to hide mesh.
    * @example niivue.setMeshThicknessOn2D(42)
-   * @see {@link https://niivue.github.io/niivue/features/worldspace2.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/worldspace2.html | live demo usage}
    */
   setMeshThicknessOn2D(meshThicknessOn2D) {
     this.opts.meshThicknessOn2D = meshThicknessOn2D;
@@ -36709,7 +37265,7 @@ var Niivue = class {
    * Create a custom multi-slice mosaic (aka lightbox, montage) view.
    * @param str - description of mosaic.
    * @example niivue.setSliceMosaicString("A 0 20 C 30 S 42")
-   * @see {@link https://niivue.github.io/niivue/features/mosaics.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/mosaics.html | live demo usage}
    */
   setSliceMosaicString(str6) {
     this.sliceMosaicString = str6;
@@ -36719,7 +37275,7 @@ var Niivue = class {
    * control 2D slice view mode.
    * @param isSliceMM - control whether 2D slices use world space (true) or voxel space (false). Beware that voxel space mode limits properties like panning, zooming and mesh visibility.
    * @example niivue.setSliceMM(true)
-   * @see {@link https://niivue.github.io/niivue/features/worldspace2.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/worldspace2.html | live demo usage}
    */
   setSliceMM(isSliceMM) {
     this.opts.isSliceMM = isSliceMM;
@@ -36729,7 +37285,7 @@ var Niivue = class {
    * control whether voxel overlays are combined using additive (emission) or traditional (transmission) blending.
    * @param isAdditiveBlend - emission (true) or transmission (false) mixing
    * @example niivue.isAdditiveBlend(true)
-   * @see {@link https://niivue.github.io/niivue/features/additive.voxels.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/additive.voxels.html | live demo usage}
    */
   setAdditiveBlend(isAdditiveBlend) {
     this.opts.isAdditiveBlend = isAdditiveBlend;
@@ -36747,7 +37303,7 @@ var Niivue = class {
    * Force WebGL canvas to use high resolution display, regardless of browser defaults.
    * @param forceDevicePixelRatio - -1: block high DPI; 0= allow high DPI: >0 use specified pixel ratio
    * @example niivue.setHighResolutionCapable(true);
-   * @see {@link https://niivue.github.io/niivue/features/sync.mesh.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/sync.mesh.html | live demo usage}
    */
   setHighResolutionCapable(forceDevicePixelRatio) {
     if (typeof forceDevicePixelRatio === "boolean") {
@@ -36758,12 +37314,35 @@ var Niivue = class {
     this.drawScene();
   }
   /**
+   * Start watching for changes to configuration options.
+   * This is a convenience method that sets up the onOptsChange callback.
+   * @param callback - Function to call when any option changes
+   * @example
+   * niivue.watchOptsChanges((propertyName, newValue, oldValue) => {
+   *   console.log(`Option ${propertyName} changed from ${oldValue} to ${newValue}`)
+   * })
+   * @see {@link https://niivue.com/demos/ | live demo usage}
+   */
+  watchOptsChanges(callback) {
+    this.onOptsChange = callback;
+  }
+  /**
+   * Stop watching for changes to configuration options.
+   * This removes the current onOptsChange callback.
+   * @example niivue.unwatchOptsChanges()
+   * @see {@link https://niivue.com/demos/ | live demo usage}
+   */
+  unwatchOptsChanges() {
+    this.onOptsChange = () => {
+    };
+  }
+  /**
    * add a new volume to the canvas
    * @param volume - the new volume to add to the canvas
    * @example
    * niivue = new Niivue()
    * niivue.addVolume(NVImage.loadFromUrl({url:'../someURL.nii.gz'}))
-   * @see {@link https://niivue.github.io/niivue/features/document.3d.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/conform.html | live demo usage}
    */
   addVolume(volume) {
     this.volumes.push(volume);
@@ -36779,7 +37358,7 @@ var Niivue = class {
    * @example
    * niivue = new Niivue()
    * niivue.addMesh(NVMesh.loadFromUrl({url:'../someURL.gii'}))
-   * @see {@link https://niivue.github.io/niivue/features/document.3d.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/document.3d.html | live demo usage}
    */
   addMesh(mesh) {
     this.meshes.push(mesh);
@@ -36804,8 +37383,11 @@ var Niivue = class {
     }
     return -1;
   }
-  // not included in public docs
-  // Internal function to store drawings that can be used for undo operations
+  /**
+   * Saves the current drawing state as an RLE-compressed bitmap for undo history.
+   * Uses a circular buffer to limit undo memory usage.
+   * @internal
+   */
   drawAddUndoBitmap() {
     if (!this.drawBitmap || this.drawBitmap.length < 1) {
       log.debug("drawAddUndoBitmap error: No drawing open");
@@ -36817,8 +37399,10 @@ var Niivue = class {
     }
     this.drawUndoBitmaps[this.currentDrawUndoBitmap] = encodeRLE(this.drawBitmap);
   }
-  // not included in public docs
-  // Internal function to delete all drawing undo images
+  /**
+   * Clears all stored drawing undo bitmaps and resets the undo index.
+   * @internal
+   */
   drawClearAllUndoBitmaps() {
     this.currentDrawUndoBitmap = this.opts.maxDrawUndoBitmaps;
     if (!this.drawUndoBitmaps || this.drawUndoBitmaps.length < 1) {
@@ -36831,7 +37415,7 @@ var Niivue = class {
   /**
    * Restore drawing to previous state
    * @example niivue.drawUndo();
-   * @see {@link https://niivue.github.io/niivue/features/draw.ui.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/draw.ui.html | live demo usage}
    */
   drawUndo() {
     if (this.drawUndoBitmaps.length < 1) {
@@ -36852,7 +37436,14 @@ var Niivue = class {
     this.drawBitmap = decodeRLE(this.drawUndoBitmaps[this.currentDrawUndoBitmap], this.drawBitmap.length);
     this.refreshDrawing(true);
   }
-  // not included in public docs
+  /**
+   * Loads a drawing overlay and aligns it with the current background image.
+   * Converts the input image to match the background's orientation and stores it as a drawable bitmap.
+   * Initializes the undo history and prepares the drawing texture.
+   *
+   * @param drawingBitmap - A `NVImage` object representing the drawing to load. Must match the dimensions of the background image.
+   * @returns `true` if the drawing was successfully loaded and aligned; `false` if dimensions are incompatible.
+   */
   loadDrawing(drawingBitmap) {
     if (this.drawBitmap) {
       log.debug("Overwriting open drawing!");
@@ -36939,7 +37530,11 @@ var Niivue = class {
     this.drawScene();
     return true;
   }
-  // not included in public docs
+  /**
+   * Binarize a volume by converting all non-zero voxels to 1
+   * @param volume - the image volume to modify in place
+   * @see {@link https://niivue.com/demos/features/clusterize.html | live demo usage}
+   */
   binarize(volume) {
     const dims = volume.hdr.dims;
     const vx = dims[1] * dims[2] * dims[3];
@@ -36959,7 +37554,7 @@ var Niivue = class {
    * @param fnm - filename of NIfTI format drawing
    * @param isBinarize - if true will force drawing voxels to be either 0 or 1.
    * @example niivue.loadDrawingFromUrl("../images/lesion.nii.gz");
-   * @see {@link https://niivue.github.io/niivue/features/draw.ui.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/draw.ui.html | live demo usage}
    */
   async loadDrawingFromUrl(fnm, isBinarize = false) {
     if (this.drawBitmap) {
@@ -36979,7 +37574,11 @@ var Niivue = class {
     }
     return ok;
   }
-  // not included in public docs
+  /**
+   * Computes one or more Otsu threshold levels for the primary volume.
+   * Returns raw intensity values corresponding to bin-based thresholds.
+   * @internal
+   */
   findOtsu(mlevel = 2) {
     if (this.volumes.length < 1) {
       return [];
@@ -37075,7 +37674,7 @@ var Niivue = class {
    * remove dark voxels in air
    * @param levels - (2-4) segment brain into this many types. For example drawOtsu(2) will create a binary drawing where bright voxels are colored and dark voxels are clear.
    * @example niivue.drawOtsu(3);
-   * @see {@link https://niivue.github.io/niivue/features/draw.ui.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/draw.ui.html | live demo usage}
    */
   drawOtsu(levels = 2) {
     if (this.volumes.length === 0) {
@@ -37114,7 +37713,7 @@ var Niivue = class {
    * @param level - (1-5) larger values for more preserved voxels
    * @param volIndex - volume to dehaze
    * @example niivue.removeHaze(3, 0);
-   * @see {@link https://niivue.github.io/niivue/features/draw.ui.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/draw.ui.html | live demo usage}
    */
   removeHaze(level = 5, volIndex = 0) {
     const img = this.volumes[volIndex].img;
@@ -37162,7 +37761,7 @@ var Niivue = class {
    * @example
    * niivue.saveImage({ filename: "myimage.nii.gz", isSaveDrawing: true });
    * niivue.saveImage({ filename: "myimage.nii.gz", isSaveDrawing: true });
-   * @see {@link https://niivue.github.io/niivue/features/draw.ui.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/draw.ui.html | live demo usage}
    */
   async saveImage(options = defaultSaveImageOptions) {
     const saveOptions = {
@@ -37254,7 +37853,12 @@ var Niivue = class {
     const img = this.volumes[volumeByIndex].saveToDisk(filename);
     return img;
   }
-  // not included in public docs
+  /**
+   * Returns the index of a mesh given its ID or index.
+   *
+   * @param id - The mesh ID as a string, or an index number.
+   * @returns The mesh index, or -1 if not found or out of range.
+   */
   getMeshIndexByID(id) {
     if (typeof id === "number") {
       if (id >= this.meshes.length) {
@@ -37277,7 +37881,7 @@ var Niivue = class {
    * @param key - attribute to change
    * @param val - for attribute
    * @example niivue.setMeshProperty(niivue.meshes[0].id, 'fiberLength', 42)
-   * @see {@link https://niivue.github.io/niivue/features/meshes.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/meshes.html | live demo usage}
    */
   setMeshProperty(id, key, val) {
     const idx = this.getMeshIndexByID(id);
@@ -37297,7 +37901,7 @@ var Niivue = class {
    * @param Zmm - location in foot/head dimension
    * @returns the an array where ret[0] is the mesh index and ret[1] is distance from vertex to coordinates
    * @example niivue.indexNearestXYZmm(niivue.meshes[0].id, -22, 42, 13)
-   * @see {@link https://niivue.github.io/niivue/features/clipplanes.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/clipplanes.html | live demo usage}
    */
   indexNearestXYZmm(mesh, Xmm, Ymm, Zmm) {
     const idx = this.getMeshIndexByID(mesh);
@@ -37313,7 +37917,7 @@ var Niivue = class {
    * @param order - decimation order 0..6
    * @example niivue.decimateHierarchicalMesh(niivue.meshes[0].id, 4)
    * @returns boolean false if mesh is not hierarchical or of lower order
-   * @see {@link https://niivue.github.io/niivue/features/meshes.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/meshes.html | live demo usage}
    */
   decimateHierarchicalMesh(mesh, order = 3) {
     const idx = this.getMeshIndexByID(mesh);
@@ -37329,7 +37933,7 @@ var Niivue = class {
    * reverse triangle winding of mesh (swap front and back faces)
    * @param mesh - identity of mesh to change
    * @example niivue.reverseFaces(niivue.meshes[0].id)
-   * @see {@link https://niivue.github.io/niivue/features/meshes.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/meshes.html | live demo usage}
    */
   reverseFaces(mesh) {
     const idx = this.getMeshIndexByID(mesh);
@@ -37347,7 +37951,7 @@ var Niivue = class {
    * @param key - attribute to change
    * @param val - value for attribute
    * @example niivue.setMeshLayerProperty(niivue.meshes[0].id, 0, 'frame4D', 22)
-   * @see {@link https://niivue.github.io/niivue/features/mesh.4D.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/mesh.4D.html | live demo usage}
    */
   async setMeshLayerProperty(mesh, layer, key, val) {
     const idx = this.getMeshIndexByID(mesh);
@@ -37373,7 +37977,7 @@ var Niivue = class {
   /**
    * set rotation of 3D render view
    * @example niivue.setRenderAzimuthElevation(45, 15)
-   * @see {@link https://niivue.github.io/niivue/features/mask.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/mask.html | live demo usage}
    */
   setRenderAzimuthElevation(a, e) {
     this.scene.renderAzimuth = a;
@@ -37434,7 +38038,15 @@ var Niivue = class {
     }
     this.updateGLVolume();
   }
-  // not included in public docs
+  /**
+   * Reorders a mesh within the internal mesh list.
+   *
+   * @param mesh - The `NVMesh` instance to reposition.
+   * @param toIndex - Target index to move the mesh to.
+   *   - If `0`, moves mesh to the front.
+   *   - If `< 0`, removes the mesh.
+   *   - If within bounds, inserts mesh at the specified index.
+   */
   setMesh(mesh, toIndex = 0) {
     this.meshes.forEach((m) => {
       log.debug("MESH: ", m.name);
@@ -37464,7 +38076,7 @@ var Niivue = class {
    * @example
    * niivue = new Niivue()
    * niivue.removeVolume(this.volumes[3])
-   * @see {@link https://niivue.github.io/niivue/features/document.3d.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/document.3d.html | live demo usage}
    */
   removeVolume(volume) {
     this.setVolume(volume, -1);
@@ -37476,8 +38088,10 @@ var Niivue = class {
     this.drawScene();
   }
   /**
-   * Remove a volume by index
-   * @param index - of volume to remove
+   * Remove a volume from the scene by its index
+   * @param index - index of the volume to remove
+   * @throws if the index is out of bounds
+   * @see {@link https://niivue.com/demos/features/clusterize.html | live demo usage}
    */
   removeVolumeByIndex(index) {
     if (index >= this.volumes.length) {
@@ -37491,7 +38105,7 @@ var Niivue = class {
    * @example
    * niivue = new Niivue()
    * niivue.removeMesh(this.meshes[3])
-   * @see {@link https://niivue.github.io/niivue/features/connectome.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/connectome.html | live demo usage}
    */
   removeMesh(mesh) {
     mesh.unloadMesh(this.gl);
@@ -37558,16 +38172,20 @@ var Niivue = class {
   moveVolumeToTop(volume) {
     this.setVolume(volume, this.volumes.length - 1);
   }
-  // not included in public docs
-  // update mouse position from new mouse down coordinates
-  // note: no test yet
+  /**
+   * Records the current mouse position in screen space (adjusted for device pixel ratio).
+   * @internal
+   */
   mouseDown(x, y) {
     x *= this.uiData.dpr;
     y *= this.uiData.dpr;
     this.mousePos = [x, y];
   }
-  // not included in public docs
-  // note: no test yet
+  /**
+   * Updates mouse position and modifies 3D render view if the pointer is in the render tile.
+   *
+   * @internal
+   */
   mouseMove(x, y) {
     x *= this.uiData.dpr;
     y *= this.uiData.dpr;
@@ -37615,7 +38233,7 @@ var Niivue = class {
    * @example
    * niivue = new Niivue()
    * niivue.setClipPlane([42, 42])
-   * @see {@link https://niivue.github.io/niivue/features/mask.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/mask.html | live demo usage}
    */
   setClipPlane(depthAzimuthElevation) {
     const v = this.sph2cartDeg(depthAzimuthElevation[1] + 180, depthAzimuthElevation[2]);
@@ -37630,7 +38248,7 @@ var Niivue = class {
    * @example
    * niivue = new Niivue()
    * niivue.setCrosshairColor([0, 1, 0, 0.5]) // set crosshair to transparent green
-   * @see {@link https://niivue.github.io/niivue/features/colormaps.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/colormaps.html | live demo usage}
    */
   setCrosshairColor(color) {
     this.opts.crosshairColor = color;
@@ -37639,7 +38257,7 @@ var Niivue = class {
   /**
    * set thickness of crosshair
    * @example niivue.crosshairWidth(2)
-   * @see {@link https://niivue.github.io/niivue/features/colormaps.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/colormaps.html | live demo usage}
    */
   setCrosshairWidth(crosshairWidth) {
     this.opts.crosshairWidth = crosshairWidth;
@@ -37660,7 +38278,7 @@ var Niivue = class {
    *    labels: ["", "white-matter", "delete T1"],
    *  };
    *  nv.setDrawColormap(cmap);
-   * @see {@link https://niivue.github.io/niivue/features/draw.ui.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/draw.ui.html | live demo usage}
    */
   setDrawColormap(name) {
     this.drawLut = cmapper.makeDrawLut(name);
@@ -37670,7 +38288,7 @@ var Niivue = class {
    * does dragging over a 2D slice create a drawing?
    * @param trueOrFalse - enabled (true) or not (false)
    * @example niivue.setDrawingEnabled(true)
-   * @see {@link https://niivue.github.io/niivue/features/draw.ui.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/draw.ui.html | live demo usage}
    */
   setDrawingEnabled(trueOrFalse) {
     this.opts.drawingEnabled = trueOrFalse;
@@ -37694,7 +38312,7 @@ var Niivue = class {
    * @param penValue - sets the color of the pen
    * @param isFilledPen - determines if dragging creates flood-filled shape
    * @example niivue.setPenValue(1, true)
-   * @see {@link https://niivue.github.io/niivue/features/draw.ui.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/draw.ui.html | live demo usage}
    */
   setPenValue(penValue, isFilledPen = false) {
     this.opts.penValue = penValue;
@@ -37705,7 +38323,7 @@ var Niivue = class {
    * control whether drawing is transparent (0), opaque (1) or translucent (between 0 and 1).
    * @param opacity - translucency of drawing
    * @example niivue.setDrawOpacity(0.7)
-   * @see {@link https://niivue.github.io/niivue/features/draw.ui.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/draw.ui.html | live demo usage}
    */
   setDrawOpacity(opacity) {
     this.drawOpacity = opacity;
@@ -37717,12 +38335,15 @@ var Niivue = class {
    * @example
    * niivue = new Niivue()
    * niivue.setSelectionBoxColor([0, 1, 0, 0.5]) // set to transparent green
-   * @see {@link https://niivue.github.io/niivue/features/colormaps.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/colormaps.html | live demo usage}
    */
   setSelectionBoxColor(color) {
     this.opts.selectionBoxColor = color;
   }
-  // not included in public docs
+  /**
+   * Handles mouse wheel or trackpad scroll to change slices, zoom, or frame depending on context.
+   * @internal
+   */
   sliceScroll2D(posChange, x, y, isDelta = true) {
     if (this.opts.scrollRequiresFocus && this.canvas !== document.activeElement) {
       log.warn("Canvas element does not have focus. Scroll events will not be processed.");
@@ -37764,7 +38385,7 @@ var Niivue = class {
    * @example
    * niivue = new Niivue()
    * niivue.setSliceType(Niivue.sliceTypeMultiplanar)
-   * @see {@link https://niivue.github.io/niivue/features/basic.multiplanar.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/basic.multiplanar.html | live demo usage}
    */
   setSliceType(st) {
     this.opts.sliceType = st;
@@ -37778,7 +38399,7 @@ var Niivue = class {
    * @example
    * niivue = new Niivue()
    * niivue.setOpacity(0, 0.5) // make the first volume transparent
-   * @see {@link https://niivue.github.io/niivue/features/atlas.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/atlas.html | live demo usage}
    */
   setOpacity(volIdx, newOpacity) {
     this.volumes[volIdx].opacity = newOpacity;
@@ -37789,7 +38410,7 @@ var Niivue = class {
    * @param scale - the new scale value
    * @example
    * niivue.setScale(2) // zoom some
-   * @see {@link https://niivue.github.io/niivue/features/shiny.volumes.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/shiny.volumes.html | live demo usage}
    */
   setScale(scale6) {
     this.scene.volScaleMultiplier = scale6;
@@ -37800,7 +38421,7 @@ var Niivue = class {
    * @param color - the new color. expects an array of RGBA values. values can range from 0 to 1
    * @example
    * niivue.setClipPlaneColor([1, 1, 1, 0.5]) // white, transparent
-   * @see {@link https://niivue.github.io/niivue/features/clipplanes.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/clipplanes.html | live demo usage}
    */
   setClipPlaneColor(color) {
     this.opts.clipPlaneColor = color;
@@ -37813,7 +38434,7 @@ var Niivue = class {
    * @param thick - thickness of slab. Value 0..1.73 (cube opposite corner length is sqrt(3)).
    * @example
    * niivue.setClipPlaneThick(0.3) // thin slab
-   * @see {@link https://niivue.github.io/niivue/features/clipplanes.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/clipplanes.html | live demo usage}
    */
   setClipPlaneThick(thick) {
     this.opts.clipThick = thick;
@@ -37827,7 +38448,7 @@ var Niivue = class {
    * @param high - 3-component array specifying the upper bound of the clipping region along the X, Y, and Z axes. Values range from 0 to 1.
    * @example
    * niivue.setClipPlaneColor([0.0, 0.0, 0.2], [1.0, 1.0, 0.7]) // remove inferior 20% and superior 30%
-   * @see {@link https://niivue.github.io/niivue/features/clipplanes.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/clipplanes.html | live demo usage}
    */
   setClipVolume(low, high) {
     this.opts.clipVolumeLow = [Math.min(low[0], high[0]), Math.min(low[1], high[1]), Math.min(low[2], high[2])];
@@ -37845,8 +38466,8 @@ var Niivue = class {
    * @param gradientAmount - amount of matcap (NaN or 0..1), default 0 (matte, surface normal does not influence color). NaN renders the gradients.
    * @example
    * niivue.setVolumeRenderIllumination(0.6);
-   * @see {@link https://niivue.github.io/niivue/features/shiny.volumes.html | live demo usage}
-   * @see {@link https://niivue.github.io/niivue/features/gradient.order.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/shiny.volumes.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/gradient.order.html | live demo usage}
    */
   async setVolumeRenderIllumination(gradientAmount = 0) {
     this.renderGradientValues = Number.isNaN(gradientAmount);
@@ -37861,6 +38482,7 @@ var Niivue = class {
         this.renderShader = this.renderSliceShader;
       }
     }
+    await this.refreshLayers(this.volumes[0], 0);
     this.initRenderShader(this.renderShader, gradientAmount);
     this.renderShader.use(this.gl);
     this.setClipPlaneColor(this.opts.clipPlaneColor);
@@ -37872,7 +38494,6 @@ var Niivue = class {
     if (this.volumes.length < 1) {
       return;
     }
-    this.refreshLayers(this.volumes[0], 0);
     this.drawScene();
   }
   /**
@@ -37881,7 +38502,7 @@ var Niivue = class {
    * @param renderSilhouette - make core transparent to enhance rims (0..1), default 0 (no-influence)
    * @example
    * niivue.setGradientOpacity(0.6);
-   * @see {@link https://niivue.github.io/niivue/features/gradient.opacity.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/gradient.opacity.html | live demo usage}
    */
   async setGradientOpacity(gradientOpacity = 0, renderSilhouette = 0) {
     this.opts.gradientOpacity = gradientOpacity;
@@ -37900,8 +38521,11 @@ var Niivue = class {
     }
     this.drawScene();
   }
-  // not included in public docs.
-  // note: marked for removal at some point in the future (this just makes a test sphere)
+  /**
+   * Generates a placeholder RGBA overlay of a green sphere for testing purposes only.
+   * @internal
+   * @remarks Marked for future removal — creates a test sphere, not intended for production use.
+   */
   overlayRGBA(volume) {
     const hdr = volume.hdr;
     const vox = hdr.dims[1] * hdr.dims[2] * hdr.dims[3];
@@ -37931,7 +38555,10 @@ var Niivue = class {
     }
     return imgRGBA;
   }
-  // not included in public docs
+  /**
+   * Convert voxel coordinates to millimeters using a transformation matrix.
+   * @internal
+   */
   vox2mm(XYZ, mtx) {
     return NVUtilities.vox2mm(XYZ, mtx);
   }
@@ -37947,8 +38574,7 @@ var Niivue = class {
     return this.volumes[index].clone();
   }
   /**
-   *
-   * @param url - URL of NVDocument
+   * Loads an NVDocument from a URL and integrates it into the scene.
    */
   async loadDocumentFromUrl(url) {
     const document2 = await NVDocument.loadFromUrl(url);
@@ -37957,7 +38583,7 @@ var Niivue = class {
   /**
    * Loads an NVDocument
    * @returns  Niivue instance
-   * @see {@link https://niivue.github.io/niivue/features/document.load.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/document.load.html | live demo usage}
    */
   async loadDocument(document2) {
     this.volumes = [];
@@ -38071,6 +38697,7 @@ var Niivue = class {
   * const javascript = this.generateLoadDocumentJavaScript("gl1");
   * const html = `<html><body><canvas id="gl1"></canvas><script type="module" async>
          ${javascript}<\/script></body></html>`;
+  * @see {@link https://niivue.com/demos/features/save.custom.html.html | live demo usage}
   */
   async generateLoadDocumentJavaScript(canvasId, esm) {
     const json = this.json();
@@ -38184,10 +38811,12 @@ var Niivue = class {
     return html;
   }
   /**
-   * save current scene as HTML
-   * @param fileName - the name of the HTML file
-   * @param canvasId - id of canvas NiiVue will be attached to
-   * @param esm - bundled version of NiiVue
+   * Save the current scene as a standalone HTML file
+   * @param fileName - name of the HTML file to save (default: "untitled.html")
+   * @param canvasId - ID of the canvas element NiiVue will attach to
+   * @param esm - bundled ES module source for NiiVue
+   * @returns a Promise that resolves when the file is downloaded
+   * @see {@link https://niivue.com/demos/features/save.html.html | live demo usage}
    */
   async saveHTML(fileName = "untitled.html", canvasId = "gl1", esm) {
     const html = await this.generateHTML(canvasId, esm);
@@ -38218,6 +38847,7 @@ var Niivue = class {
    * @example
    * // smallest possible file – no preview, just metadata
    * await nv.saveDocument('scene.nvd', true, { embedImages:false, embedPreview:false });
+   * @see {@link https://niivue.com/demos/features/document.3d.html | live demo usage}
    */
   async saveDocument(fileName = "untitled.nvd", compress = true, options = {}) {
     const { embedImages = true, embedPreview = true } = options;
@@ -38232,7 +38862,13 @@ var Niivue = class {
     }
     await this.document.download(fileName, compress, { embedImages });
   }
-  // generic loadImages that wraps loadVolumes and loadMeshes
+  /**
+   * Load an array of image or mesh URLs using appropriate handlers
+   * @param images - array of image or mesh descriptors (with URL and optional name)
+   * @returns a Promise resolving to the current NiiVue instance after loading completes
+   * @remarks Automatically dispatches each item to either volume or mesh loader based on file extension or registered custom loader
+   * @see {@link https://niivue.com/demos/features/timeseries2.html | live demo usage}
+   */
   async loadImages(images) {
     const volumes = [];
     const meshes = [];
@@ -38308,7 +38944,7 @@ var Niivue = class {
    * @example
    * niivue = new Niivue()
    * niivue.loadVolumes([{url: 'someImage.nii.gz}, {url: 'anotherImage.nii.gz'}])
-   * @see {@link https://niivue.github.io/niivue/features/mask.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/mask.html | live demo usage}
    */
   async loadVolumes(volumeList) {
     this.drawScene();
@@ -38396,7 +39032,7 @@ var Niivue = class {
    * @example
    * niivue = new Niivue()
    * niivue.loadMeshes([{url: 'someMesh.gii'}])
-   * @see {@link https://niivue.github.io/niivue/features/meshes.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/meshes.html | live demo usage}
    */
   async loadMeshes(meshList) {
     this.drawScene();
@@ -38420,7 +39056,7 @@ var Niivue = class {
    * @param url - the URL to a JSON-formatted connectome definition
    * @param headers - optional HTTP headers to include with the request (e.g. for authorization)
    * @returns the `Niivue` instance (for method chaining)
-   * @see {@link https://niivue.github.io/niivue/features/connectome.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/connectome.html | live demo usage}
    */
   async loadConnectomeFromUrl(url, headers = {}) {
     const response = await fetch(url, { headers });
@@ -38432,7 +39068,7 @@ var Niivue = class {
    * @param url - the URL of the JSON-formatted connectome file
    * @param headers - optional HTTP headers to include in the fetch request (e.g. for authorization)
    * @returns the `Niivue` instance (for method chaining)
-   * @see {@link https://niivue.github.io/niivue/features/connectome.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/connectome.html | live demo usage}
    */
   async loadFreeSurferConnectomeFromUrl(url, headers = {}) {
     const response = await fetch(url, { headers });
@@ -38443,12 +39079,16 @@ var Niivue = class {
    * load a connectome specified by json
    * @param json - freesurfer model
    * @returns Niivue instance
-   * @see {@link https://niivue.github.io/niivue/features/connectome.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/connectome.html | live demo usage}
    */
   async loadFreeSurferConnectome(json) {
     const connectome = NVConnectome.convertFreeSurferConnectome(json);
     return this.loadConnectome(connectome);
   }
+  /**
+   * Handles addition of a connectome node by adding a corresponding label and redrawing.
+   * @internal
+   */
   handleNodeAdded(event) {
     const node = event.detail.node;
     const rgba = [1, 1, 1, 1];
@@ -38467,6 +39107,13 @@ var Niivue = class {
     );
     this.drawScene();
   }
+  /**
+   * Converts various connectome JSON formats to a standardized mesh representation.
+   *
+   * @param json - Connectome data in current or legacy format.
+   * @returns The connectome as an `NVMesh`.
+   * @internal
+   */
   loadConnectomeAsMesh(json) {
     let connectome = json;
     if ("data_type" in json && json.data_type === "fs_pointset") {
@@ -38476,7 +39123,6 @@ var Niivue = class {
       const nodes = json.nodes;
       if ("names" in nodes && "X" in nodes && "Y" in nodes && "Z" in nodes && "Color" in nodes && "Size" in nodes) {
         connectome = NVConnectome.convertLegacyConnectome(json);
-        log.warn("converted legacy connectome", connectome);
       }
     } else {
       throw new Error("not a known connectome format");
@@ -38487,7 +39133,7 @@ var Niivue = class {
    * load a connectome specified by json
    * @param json - connectome model
    * @returns Niivue instance
-   * @see {@link https://niivue.github.io/niivue/features/connectome.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/connectome.html | live demo usage}
    */
   loadConnectome(json) {
     this.drawScene();
@@ -38502,7 +39148,7 @@ var Niivue = class {
   /**
    * generate a blank canvas for the pen tool
    * @example niivue.createEmptyDrawing()
-   * @see {@link https://niivue.github.io/niivue/features/cactus.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/cactus.html | live demo usage}
    */
   createEmptyDrawing() {
     if (this.back === null || !this.back.dims) {
@@ -38524,8 +39170,10 @@ var Niivue = class {
     }
     this.refreshDrawing(false);
   }
-  // not included in public docs
-  // create a 1-component (red) 16-bit signed integer texture on the GPU
+  /**
+   * Creates or updates a 1-component 16-bit signed integer 3D texture on the GPU.
+   * @internal
+   */
   r16Tex(texID, activeID, dims, img16) {
     if (texID) {
       this.gl.deleteTexture(texID);
@@ -38563,7 +39211,7 @@ var Niivue = class {
    * dilate drawing so all voxels are colored.
    * works on drawing with multiple colors
    * @example niivue.drawGrowCut();
-   * @see {@link https://niivue.github.io/niivue/features/draw2.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/draw2.html | live demo usage}
    */
   drawGrowCut() {
     if (!this.back || !this.back.dims) {
@@ -38679,8 +39327,10 @@ var Niivue = class {
     this.drawAddUndoBitmap();
     this.refreshDrawing(true);
   }
-  // not included in public docs
-  // set color of single voxel in drawing
+  /**
+   * Sets the color value of a voxel and its neighbors in the drawing bitmap.
+   * @internal
+   */
   drawPt(x, y, z, penValue, drawBitmap = null) {
     if (drawBitmap === null) {
       drawBitmap = this.drawBitmap;
@@ -38713,11 +39363,10 @@ var Niivue = class {
       }
     }
   }
-  // not included in public docs
-  // create line between to voxels in drawing
-  // https://en.wikipedia.org/wiki/Bresenham%27s_line_algorithm
-  // https://www.geeksforgeeks.org/bresenhams-algorithm-for-3-d-line-drawing/
-  // ptA, ptB are start and end points of line (each XYZ)
+  /**
+   * Draws a 3D line between two voxels in the drawing bitmap using Bresenham's algorithm.
+   * @internal
+   */
   drawPenLine(ptA, ptB, penValue) {
     const dx = Math.abs(ptA[0] - ptB[0]);
     const dy = Math.abs(ptA[1] - ptB[1]);
@@ -38885,10 +39534,13 @@ var Niivue = class {
       log.error("Error in drawingBinaryDilationWithSeed:", error);
     }
   }
-  // a voxel can be defined as having 6, 18 or 26 neighbors:
-  //   6: neighbors share faces (distance=1)
-  //  18: neighbors share faces (distance=1) or edges (1.4)
-  //  26: neighbors share faces (distance=1), edges (1.4) or corners (1.7)
+  /**
+   * Flood fill to cluster connected voxels based on neighbor connectivity (6, 18, or 26 neighbors).
+   * Voxels with value 1 are included in the cluster and set to 2.
+   * Uses a queue-based breadth-first search.
+   *
+   * @internal
+   */
   drawFloodFillCore(img, seedVx, neighbors = 6) {
     if (!this.back?.dims) {
       throw new Error("back.dims undefined");
@@ -38964,8 +39616,13 @@ var Niivue = class {
       testNeighbor([1, 1, 1]);
     }
   }
-  // not included in public docs
-  // set all connected voxels in drawing to new color
+  /**
+   * Performs a flood fill on the drawing bitmap starting from a seed voxel, recoloring all connected voxels
+   * based on spatial connectivity, intensity constraints, and other parameters.
+   * Supports 2D or 3D fills, cluster growing, distance constraints, and preview mode for clickToSegment.
+   *
+   * @internal
+   */
   drawFloodFill(seedXYZ, newColor = 0, growSelectedCluster = 0, forceMin = NaN, forceMax = NaN, neighbors = 6, maxDistanceMM = Number.POSITIVE_INFINITY, is2D = false, targetBitmap = null, isGrowClusterTool = false) {
     if (!this.drawBitmap) {
       log.warn("drawFloodFill called without an initialized drawBitmap.");
@@ -39184,9 +39841,10 @@ var Niivue = class {
       this.refreshDrawing(true, true);
     }
   }
-  // not included in public docs
-  // given series of line segments, connect first and last
-  // voxel and fill the interior of the line segments
+  /**
+   * Connects and fills the interior of drawn line segments in 2D slice space.
+   * @internal
+   */
   drawPenFilled() {
     const nPts = this.drawPenFillPts.length;
     if (nPts < 2) {
@@ -39359,7 +40017,7 @@ var Niivue = class {
   /**
    * close drawing: make sure you have saved any changes before calling this!
    * @example niivue.closeDrawing();
-   * @see {@link https://niivue.github.io/niivue/features/draw.ui.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/draw.ui.html | live demo usage}
    */
   closeDrawing() {
     this.drawClearAllUndoBitmaps();
@@ -39372,7 +40030,7 @@ var Niivue = class {
    * copy drawing bitmap from CPU to GPU storage and redraw the screen
    * @param isForceRedraw - refreshes scene immediately (default true)
    * @example niivue.refreshDrawing();
-   * @see {@link https://niivue.github.io/niivue/features/cactus.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/cactus.html | live demo usage}
    */
   refreshDrawing(isForceRedraw = true, useClickToSegmentBitmap = false) {
     if (useClickToSegmentBitmap && (!this.opts.drawingEnabled || !this.opts.clickToSegment)) {
@@ -39458,8 +40116,10 @@ var Niivue = class {
       this.drawScene();
     }
   }
-  // not included in public docs
-  // Create 3D 1-component (red) uint8 texture on GPU using dims[1] and dims[2]
+  /**
+   * Creates a 2D 1-component uint8 texture on the GPU with given dimensions.
+   * @internal
+   */
   r8Tex2D(texID, activeID, dims, isInit = false) {
     if (texID) {
       this.gl.deleteTexture(texID);
@@ -39492,8 +40152,10 @@ var Niivue = class {
     }
     return texID;
   }
-  // not included in public docs
-  // create 3D 1-component (red) uint8 texture on GPU
+  /**
+   * Creates a 3D 1-component uint8 texture on the GPU with given dimensions.
+   * @internal
+   */
   r8Tex(texID, activeID, dims, isInit = false) {
     if (texID) {
       this.gl.deleteTexture(texID);
@@ -39526,8 +40188,10 @@ var Niivue = class {
     }
     return texID;
   }
-  // not included in public docs
-  // create 3D 4-component (red,green,blue,alpha) uint8 texture on GPU
+  /**
+   * Creates a 2D 4-component (RGBA) uint8 texture on the GPU with optional vertical flip.
+   * @internal
+   */
   rgbaTex2D(texID, activeID, dims, data = null, isFlipVertical = true) {
     if (texID) {
       this.gl.deleteTexture(texID);
@@ -39571,8 +40235,10 @@ var Niivue = class {
     }
     return texID;
   }
-  // not included in public docs
-  // create 3D 4-component (red,green,blue,alpha) uint8 texture on GPU
+  /**
+   * Creates a 3D 4-component (RGBA) uint8 texture on the GPU, optionally initializing with empty data.
+   * @internal
+   */
   rgbaTex(texID, activeID, dims, isInit = false) {
     if (texID) {
       this.gl.deleteTexture(texID);
@@ -39605,8 +40271,11 @@ var Niivue = class {
     }
     return texID;
   }
-  // not included in public docs
-  // create 3D 4-component (red,green,blue,alpha) uint16 texture on GPU
+  /**
+   * Create or recreate a 3D RGBA16UI texture on the GPU with given dimensions.
+   * Deletes existing texture if provided, then allocates storage and optionally initializes with zeros.
+   * @internal
+   */
   rgba16Tex(texID, activeID, dims, isInit = false) {
     if (texID) {
       this.gl.deleteTexture(texID);
@@ -39640,15 +40309,21 @@ var Niivue = class {
     }
     return texID;
   }
-  // not included in public docs
-  // remove cross origin if not from same domain. From https://webglfundamentals.org/webgl/lessons/webgl-cors-permission.html
+  /**
+   * Remove cross-origin attribute from image if its URL is not from the same origin as the current page.
+   * @internal
+   */
   requestCORSIfNotSameOrigin(img, url) {
     if (new URL(url, window.location.href).origin !== window.location.origin) {
       img.crossOrigin = "";
     }
   }
-  // not included in public docs
-  // creates 4-component (red,green,blue,alpha) uint8 texture on GPU
+  /**
+   * Loads a PNG image from a URL and creates a 4-component (RGBA) uint8 WebGL texture.
+   * Binds texture to a specific texture unit depending on textureNum and sets texture parameters.
+   * Automatically handles CORS and draws scene if needed.
+   * @internal
+   */
   async loadPngAsTexture(pngUrl, textureNum) {
     return new Promise((resolve2, reject) => {
       const img = new Image();
@@ -39700,13 +40375,17 @@ var Niivue = class {
       img.src = pngUrl;
     });
   }
-  // not included in public docs
-  // load font stored as PNG bitmap with texture unit 3
+  /**
+   * Loads a font stored as a PNG bitmap into texture unit 3.
+   * @internal
+   */
   async loadFontTexture(fontUrl) {
     return this.loadPngAsTexture(fontUrl, 3);
   }
-  // not included in public docs
-  // load PNG bitmap with texture unit 4
+  /**
+   * Loads a PNG bitmap into texture unit 4.
+   * @internal
+   */
   async loadBmpTexture(bmpUrl) {
     return this.loadPngAsTexture(bmpUrl, 4);
   }
@@ -39715,13 +40394,15 @@ var Niivue = class {
    * @param bmpUrl - name of matcap to load ("Shiny", "Cortex", "Cream")
    * @example
    * niivue.loadMatCapTexture("Cortex");
-   * @see {@link https://niivue.github.io/niivue/features/shiny.volumes.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/shiny.volumes.html | live demo usage}
    */
   async loadMatCapTexture(bmpUrl) {
     return this.loadPngAsTexture(bmpUrl, 5);
   }
-  // not included in public docs
-  // load font bitmap and metrics
+  /**
+   * Initializes font metrics from loaded font data.
+   * @internal
+   */
   initFontMets() {
     if (!this.fontMetrics) {
       throw new Error("fontMetrics undefined");
@@ -39765,8 +40446,8 @@ var Niivue = class {
    * @param metricsUrl - URL to the corresponding font metrics JSON (defines character bounds and spacing)
    * @returns a Promise that resolves when the font is loaded
    * @example
-   * niivue.loadMatCapTexture("Cortex");
-   * @see {@link https://niivue.github.io/niivue/features/selectfont.html | live demo usage}
+   * niivue.loadFont("./Roboto.png","./Roboto.json")
+   * @see {@link https://niivue.com/demos/features/selectfont.html | live demo usage}
    */
   async loadFont(fontSheetUrl = Roboto_Regular_default, metricsUrl = Roboto_Regular_default2) {
     await this.loadFontTexture(fontSheetUrl);
@@ -39780,17 +40461,27 @@ var Niivue = class {
     this.fontShader.use(this.gl);
     this.drawScene();
   }
-  // not included in public docs
+  /**
+   * Loads the default MatCap texture.
+   * @internal
+   */
   async loadDefaultMatCap() {
     return this.loadMatCapTexture(Shiny_default);
   }
-  // not included in public docs
+  /**
+   * Loads the default font texture and initializes font metrics.
+   * @internal
+   */
   async loadDefaultFont() {
     await this.loadFontTexture(this.DEFAULT_FONT_GLYPH_SHEET);
     this.fontMetrics = this.DEFAULT_FONT_METRICS;
     this.initFontMets();
   }
-  // not included in public docs
+  /**
+   * Initializes text rendering by setting up font shader, loading default font and matcap texture,
+   * and drawing the loading text.
+   * @internal
+   */
   async initText() {
     this.fontShader = new Shader(this.gl, vertFontShader, fragFontShader);
     this.fontShader.use(this.gl);
@@ -39798,7 +40489,10 @@ var Niivue = class {
     await this.loadDefaultMatCap();
     this.drawLoadingText(this.opts.loadingText);
   }
-  // not included in public docs
+  /**
+   * Maps a mesh shader name to its corresponding index number.
+   * @internal
+   */
   meshShaderNameToNumber(meshShaderName = "Phong") {
     const name = meshShaderName.toLowerCase();
     for (let i = 0; i < this.meshShaders.length; i++) {
@@ -39812,7 +40506,7 @@ var Niivue = class {
    * @param id - id of mesh to change
    * @param meshShaderNameOrNumber - identify shader for usage
    * @example niivue.setMeshShader('toon');
-   * @see {@link https://niivue.github.io/niivue/features/meshes.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/meshes.html | live demo usage}
    */
   setMeshShader(id, meshShaderNameOrNumber = 2) {
     let shaderIndex = 0;
@@ -39859,11 +40553,37 @@ var Niivue = class {
     };
   }
   /**
+   * Install a special shader for 2D slice views
+   * @param fragmentShaderText - custom fragment shader.
+   * @if not text is provided, the default shader will be used
+   * @internal
+   */
+  setCustomSliceShader(fragmentShaderText = "") {
+    const gl = this.gl;
+    if (this.customSliceShader) {
+      gl.deleteProgram(this.customSliceShader.program);
+      this.customSliceShader = null;
+    }
+    if (!fragmentShaderText) {
+      this.updateGLVolume();
+      return;
+    }
+    const shader = new Shader(gl, vertSliceMMShader, fragmentShaderText);
+    shader.use(gl);
+    gl.uniform1i(shader.uniforms.volume, 0);
+    gl.uniform1i(shader.uniforms.colormap, 1);
+    gl.uniform1i(shader.uniforms.overlay, 2);
+    gl.uniform1i(shader.uniforms.drawing, 7);
+    gl.uniform1f(shader.uniforms.drawOpacity, this.drawOpacity);
+    this.customSliceShader = shader;
+    this.updateGLVolume();
+  }
+  /**
    * Define a new GLSL shader program to influence mesh coloration
    * @param fragmentShaderText - the GLSL source code for the custom fragment shader
    * @param name - a descriptive label for the shader (used in menus or debugging)
    * @returns the index of the new shader (use with {@link setMeshShader})
-   * @see {@link https://niivue.github.io/niivue/features/mesh.atlas.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/mesh.atlas.html | live demo usage}
    */
   setCustomMeshShader(fragmentShaderText = "", name = "Custom") {
     const m = this.createCustomMeshShader(fragmentShaderText, name);
@@ -39876,7 +40596,7 @@ var Niivue = class {
    * @param sort - sort output alphabetically
    * @returns list of available mesh shader names
    * @example niivue.meshShaderNames();
-   * @see {@link https://niivue.github.io/niivue/features/meshes.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/meshes.html | live demo usage}
    */
   meshShaderNames(sort = true) {
     const cm = [];
@@ -39885,7 +40605,10 @@ var Niivue = class {
     }
     return sort === true ? cm.sort() : cm;
   }
-  // not included in public docs
+  /**
+   * Initializes a rendering shader with texture units and uniforms.
+   * @internal
+   */
   initRenderShader(shader, gradientAmount = 0) {
     shader.use(this.gl);
     this.gl.uniform1i(shader.uniforms.volume, 0);
@@ -39905,7 +40628,12 @@ var Niivue = class {
     }
     this.gl.uniform1fv(this.gl.getUniformLocation(shader.program, "gradientOpacity"), gradientOpacityLut);
   }
-  // not included in public docs
+  /**
+   * Initializes WebGL state, shaders, textures, buffers, and sets up the rendering pipeline.
+   * Also loads default fonts, matcap textures, and thumbnail if specified.
+   * @internal
+   * @returns {Promise<this>} Resolves to this instance after initialization completes.
+   */
   async init() {
     const rendererInfo = this.gl.getExtension("WEBGL_debug_renderer_info");
     if (rendererInfo) {
@@ -40033,6 +40761,7 @@ var Niivue = class {
     this.orientShaderI = new Shader(gl, vertOrientShader, fragOrientShaderI.concat(fragOrientShader));
     this.orientShaderF = new Shader(gl, vertOrientShader, fragOrientShaderF.concat(fragOrientShader));
     this.orientShaderRGBU = new Shader(gl, vertOrientShader, fragOrientShaderU.concat(fragRGBOrientShader));
+    this.orientShaderSPARQ = new Shader(gl, vertOrientShader, fragOrientShaderU.concat(fragSPARQOrientShader));
     this.surfaceShader = new Shader(gl, vertSurfaceShader, fragSurfaceShader);
     this.surfaceShader.use(gl);
     this.fiberShader = new Shader(gl, vertFiberShader, fragFiberShader);
@@ -40062,19 +40791,15 @@ var Niivue = class {
     this.drawScene();
     return this;
   }
+  /**
+   * Generates gradient texture from volume data using GPU shaders and framebuffers.
+   * @internal
+   */
   gradientGL(hdr) {
     const gl = this.gl;
-    const faceStrip = [0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 0];
-    const vao2 = gl.createVertexArray();
-    gl.bindVertexArray(vao2);
-    const vbo2 = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbo2);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(faceStrip), gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(this.genericVAO);
     const fb = gl.createFramebuffer();
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
-    gl.disable(gl.CULL_FACE);
     gl.viewport(0, 0, hdr.dims[1], hdr.dims[2]);
     gl.disable(gl.BLEND);
     const tempTex3D = this.rgbaTex(null, TEXTURE8_GRADIENT_TEMP, hdr.dims, true);
@@ -40082,27 +40807,30 @@ var Niivue = class {
     blurShader.use(gl);
     gl.activeTexture(TEXTURE0_BACK_VOL);
     gl.bindTexture(gl.TEXTURE_3D, this.volumeTexture);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     const blurRadius = 0.7;
     gl.uniform1i(blurShader.uniforms.intensityVol, 0);
     gl.uniform1f(blurShader.uniforms.dX, blurRadius / hdr.dims[1]);
     gl.uniform1f(blurShader.uniforms.dY, blurRadius / hdr.dims[2]);
     gl.uniform1f(blurShader.uniforms.dZ, blurRadius / hdr.dims[3]);
-    gl.bindVertexArray(vao2);
     for (let i = 0; i < hdr.dims[3] - 1; i++) {
       const coordZ = 1 / hdr.dims[3] * (i + 0.5);
       gl.uniform1f(blurShader.uniforms.coordZ, coordZ);
       gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, tempTex3D, 0, i);
       const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
       if (status !== gl.FRAMEBUFFER_COMPLETE) {
-        log.error("framebuffer status: ", status);
+        log.error("blur shader: ", status);
       }
       gl.clear(gl.DEPTH_BUFFER_BIT);
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, faceStrip.length / 3);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
     const sobelShader = this.opts.gradientOrder === 2 ? this.sobelSecondOrderShader : this.sobelFirstOrderShader;
     sobelShader.use(gl);
     gl.activeTexture(TEXTURE8_GRADIENT_TEMP);
     gl.bindTexture(gl.TEXTURE_3D, tempTex3D);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.uniform1i(sobelShader.uniforms.intensityVol, 8);
     const sobelRadius = 0.7;
     gl.uniform1f(sobelShader.uniforms.dX, sobelRadius / hdr.dims[1]);
@@ -40114,7 +40842,6 @@ var Niivue = class {
       gl.uniform1f(sobelShader.uniforms.dZ2, 2 * sobelRadius / hdr.dims[3]);
     }
     gl.uniform1f(sobelShader.uniforms.coordZ, 0.5);
-    gl.bindVertexArray(vao2);
     if (this.gradientTexture !== null) {
       gl.deleteTexture(this.gradientTexture);
     }
@@ -40125,22 +40852,153 @@ var Niivue = class {
       gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, this.gradientTexture, 0, i);
       const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
       if (status !== gl.FRAMEBUFFER_COMPLETE) {
-        log.error("framebuffer status: ", status);
+        log.error("sobel shader: ", status);
       }
       gl.clear(gl.DEPTH_BUFFER_BIT);
-      gl.drawArrays(gl.TRIANGLE_STRIP, 0, faceStrip.length / 3);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
     gl.deleteFramebuffer(fb);
     gl.deleteTexture(tempTex3D);
-    gl.deleteBuffer(vbo2);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.gl.bindVertexArray(this.unusedVAO);
+  }
+  /**
+   * Get the gradient texture produced by gradientGL as a TypedArray
+   * @returns Float32Array containing the gradient texture data, or null if no gradient texture exists
+   * @example
+   * niivue = new Niivue()
+   * niivue.loadVolumes([{url: './someImage.nii'}])
+   * // ... after volume is loaded and gradient is computed
+   * const gradientData = niivue.getGradientTextureData()
+   * if (gradientData) {
+   *   console.log('Gradient texture dimensions:', gradientData.length)
+   * }
+   * @see {@link https://niivue.com/demos/features/gradient.custom.html | live demo usage}
+   */
+  getGradientTextureData() {
+    if (!this.gradientTexture || !this.back) {
+      return null;
+    }
+    const gl = this.gl;
+    const dims = this.back.dims;
+    const width = dims[1];
+    const height = dims[2];
+    const depth = dims[3];
+    const numVoxels = width * height * depth;
+    const fb = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+    const data = new Float32Array(numVoxels * 4);
+    try {
+      for (let slice2 = 0; slice2 < depth; slice2++) {
+        gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, this.gradientTexture, 0, slice2);
+        const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+        if (status !== gl.FRAMEBUFFER_COMPLETE) {
+          console.warn(
+            "Framebuffer not complete for gradient texture reading, slice",
+            slice2,
+            "status:",
+            status.toString(16)
+          );
+          continue;
+        }
+        try {
+          const byteData = new Uint8Array(width * height * 4);
+          gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, byteData);
+          const sliceData = new Float32Array(width * height * 4);
+          for (let i = 0; i < byteData.length; i++) {
+            sliceData[i] = byteData[i] / 127.5 - 1;
+          }
+          const sliceOffset = slice2 * width * height * 4;
+          data.set(sliceData, sliceOffset);
+        } catch (readError) {
+          console.warn("Failed to read pixels for slice", slice2, ":", readError);
+          const sliceOffset = slice2 * width * height * 4;
+          const zeroSlice = new Float32Array(width * height * 4);
+          data.set(zeroSlice, sliceOffset);
+        }
+      }
+    } catch (error) {
+      console.error("Error reading gradient texture:", error);
+      return null;
+    } finally {
+      gl.deleteFramebuffer(fb);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+    return data;
+  }
+  /**
+   * Set a custom gradient texture to use instead of the one produced by gradientGL
+   * When a custom gradient texture is set, the useCustomGradientTexture flag is set to true
+   * to prevent gradientGL from overwriting the custom texture during volume updates.
+   * @param data - Float32Array or Uint8Array containing RGBA gradient data, or null to revert to auto-generated gradient
+   * @param dims - Optional dimensions array [width, height, depth]. If not provided, uses current volume dimensions
+   * @example
+   * niivue = new Niivue()
+   * niivue.loadVolumes([{url: './someImage.nii'}])
+   * // Create custom gradient data
+   * const customGradient = new Float32Array(256 * 256 * 256 * 4) // example dimensions
+   * // ... fill customGradient with desired values
+   * niivue.setCustomGradientTexture(customGradient, [256, 256, 256])
+   *
+   * // To revert to auto-generated gradient:
+   * niivue.setCustomGradientTexture(null)
+   * @see {@link https://niivue.com/demos/features/gradient.custom.html | live demo usage}
+   */
+  setCustomGradientTexture(data, dims) {
+    const gl = this.gl;
+    if (data === null) {
+      this.useCustomGradientTexture = false;
+      if (this.back && this.gradientTextureAmount > 0) {
+        this.gradientGL(this.back.hdr);
+      }
+      return;
+    }
+    if (!dims && !this.back) {
+      console.warn("No dimensions provided and no background volume loaded");
+      return;
+    }
+    const texDims = dims || this.back.dims;
+    const width = texDims[1];
+    const height = texDims[2];
+    const depth = texDims[3];
+    const expectedSize = width * height * depth * 4;
+    if (data.length !== expectedSize) {
+      console.warn(`Custom gradient data size mismatch. Expected ${expectedSize}, got ${data.length}`);
+      return;
+    }
+    this.useCustomGradientTexture = true;
+    if (this.gradientTexture !== null) {
+      gl.deleteTexture(this.gradientTexture);
+    }
+    this.gradientTexture = gl.createTexture();
+    gl.activeTexture(TEXTURE6_GRADIENT);
+    gl.bindTexture(gl.TEXTURE_3D, this.gradientTexture);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    let textureData;
+    if (data instanceof Float32Array) {
+      textureData = new Uint8Array(data.length);
+      for (let i = 0; i < data.length; i++) {
+        const clampedValue = Math.max(-1, Math.min(1, data[i]));
+        textureData[i] = Math.round((clampedValue + 1) * 127.5);
+      }
+    } else {
+      textureData = data;
+    }
+    gl.texStorage3D(gl.TEXTURE_3D, 1, gl.RGBA8, width, height, depth);
+    gl.texSubImage3D(gl.TEXTURE_3D, 0, 0, 0, 0, width, height, depth, gl.RGBA, gl.UNSIGNED_BYTE, textureData);
+    this.drawScene();
   }
   /**
    * update the webGL 2.0 scene after making changes to the array of volumes. It's always good to call this method after altering one or more volumes manually (outside of Niivue setter methods)
    * @example
    * niivue = new Niivue()
    * niivue.updateGLVolume()
-   * @see {@link https://niivue.github.io/niivue/features/colormaps.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/colormaps.html | live demo usage}
    */
   updateGLVolume() {
     let visibleLayers = 0;
@@ -40186,7 +41044,7 @@ var Niivue = class {
    *   startVox: [10, 20, 30], // ignored if roiIsMask is false
    *   endVox: [40, 50, 60] // ignored if roiIsMask is false
    * });
-   * @see {@link https://niivue.github.io/niivue/features/draw2.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/draw2.html | live demo usage}
    */
   getDescriptives(options) {
     const {
@@ -40351,8 +41209,10 @@ var Niivue = class {
       area
     };
   }
-  // not included in public docs
-  // apply slow computations when image properties have changed
+  /**
+   * Updates textures, shaders, and GPU state for a given overlay layer based on image properties and rendering options.
+   * @internal
+   */
   refreshLayers(overlayItem, layer) {
     if (this.volumes.length < 1) {
       return;
@@ -40618,6 +41478,9 @@ var Niivue = class {
       );
     } else if (hdr.datatypeCode === 2304 /* DT_RGBA32 */) {
       orientShader = this.orientShaderRGBU;
+      if (overlayItem.colormapLabel) {
+        orientShader = this.orientShaderSPARQ;
+      }
       orientShader.use(this.gl);
       this.gl.uniform1i(orientShader.uniforms.hasAlpha, 1);
       this.gl.texStorage3D(this.gl.TEXTURE_3D, 1, this.gl.RGBA8UI, hdr.dims[1], hdr.dims[2], hdr.dims[3]);
@@ -40841,6 +41704,7 @@ var Niivue = class {
     let outline = 0;
     if (hdr.intent_code === 1002 /* NIFTI_INTENT_LABEL */) {
       outline = this.opts.atlasOutline;
+      this.gl.uniform1ui(orientShader.uniforms.activeIndex, this.opts.atlasActiveIndex | 0);
     }
     this.gl.uniform4fv(orientShader.uniforms.xyzaFrac, [
       1 / this.back.dims[1],
@@ -40864,9 +41728,10 @@ var Niivue = class {
     this.gl.deleteFramebuffer(fb);
     if (layer === 0) {
       this.volumeTexture = outTexture;
-      if (this.gradientTextureAmount > 0) {
+      if (this.gradientTextureAmount > 0 && !this.useCustomGradientTexture) {
         this.gradientGL(hdr);
-      } else {
+        this.gl.bindVertexArray(this.genericVAO);
+      } else if (this.gradientTextureAmount <= 0) {
         if (this.gradientTexture !== null) {
           this.gl.deleteTexture(this.gradientTexture);
         }
@@ -40880,7 +41745,7 @@ var Niivue = class {
     const slicescl = this.sliceScale(true);
     const vox = slicescl.vox;
     const volScale = slicescl.volScale;
-    this.gl.uniform1f(this.renderShader.uniforms.overlays, this.overlays);
+    this.gl.uniform1f(this.renderShader.uniforms.overlays, this.overlays.length);
     this.gl.uniform4fv(this.renderShader.uniforms.clipPlaneColor, this.opts.clipPlaneColor);
     this.gl.uniform1f(this.renderShader.uniforms.clipThick, this.opts.clipThick);
     this.gl.uniform3fv(this.renderShader.uniforms.clipLo, this.opts.clipVolumeLow);
@@ -40904,6 +41769,9 @@ var Niivue = class {
     }
     if (this.opts.isV1SliceShader) {
       shader = this.sliceV1Shader;
+    }
+    if (this.customSliceShader) {
+      shader = this.customSliceShader;
     }
     if (!shader) {
       throw new Error("slice shader undefined");
@@ -40931,7 +41799,7 @@ var Niivue = class {
    * @example
    * niivue = new Niivue()
    * colormaps = niivue.colormaps()
-   * @see {@link https://niivue.github.io/niivue/features/colormaps.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/colormaps.html | live demo usage}
    */
   colormaps() {
     return cmapper.colormaps();
@@ -40940,7 +41808,7 @@ var Niivue = class {
    * create a new colormap
    * @param key - name of new colormap
    * @param cmap - colormap properties (Red, Green, Blue, Alpha and Indices)
-   * @see {@link https://niivue.github.io/niivue/features/colormaps.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/colormaps.html | live demo usage}
    */
   addColormap(key, cmap) {
     cmapper.addColormap(key, cmap);
@@ -40951,7 +41819,7 @@ var Niivue = class {
    * @param colormap - the name of the colormap to use
    * @example
    * niivue.setColormap(niivue.volumes[0].id,, 'red')
-   * @see {@link https://niivue.github.io/niivue/features/colormaps.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/colormaps.html | live demo usage}
    */
   setColormap(id, colormap) {
     const idx = this.getVolumeIndexByID(id);
@@ -40959,12 +41827,18 @@ var Niivue = class {
     this.updateGLVolume();
   }
   // port of https://github.com/rordenlab/niimath/blob/master/src/bwlabel.c
-  // return voxel address given row A, column B, and slice C
+  /**
+   * Computes the linear voxel index from 3D coordinates using image dimensions.
+   * @internal
+   */
   idx(A, B, C, DIM) {
     return C * DIM[0] * DIM[1] + B * DIM[0] + A;
   }
   // idx()
-  // determine if voxels below candidate voxel have already been assigned a label
+  /**
+   * Checks if voxels below the given voxel have labels matching its value, returning the first matching label or 0.
+   * @internal
+   */
   check_previous_slice(bw, il, r, c, sl, dim, conn, tt) {
     const nabo = new Uint32Array(27);
     let nr_set = 0;
@@ -41038,7 +41912,10 @@ var Niivue = class {
     }
   }
   // check_previous_slice()
-  // provisionally label all voxels in volume
+  /**
+   * Performs provisional labeling of connected voxels in a volume using specified connectivity.
+   * @internal
+   */
   do_initial_labelling(bw, dim, conn) {
     let label = 1;
     const kGrowArrayBy = 8192;
@@ -41113,7 +41990,10 @@ var Niivue = class {
     return [label - 1, tt, il];
   }
   // do_initial_labelling()
-  // translation table unifies a region that has been assigned multiple classes
+  /**
+   * Merges multiple provisional labels into a unified class using a translation table.
+   * @internal
+   */
   fill_tratab(tt, nabo, nr_set) {
     let cntr = 0;
     const tn = new Uint32Array(nr_set + 5).fill(0);
@@ -41138,7 +42018,10 @@ var Niivue = class {
     }
   }
   // fill_tratab()
-  // remove any residual gaps so label numbers are dense rather than sparse
+  /**
+   * Removes gaps in label indices to produce a dense labeling.
+   * @internal
+   */
   translate_labels(il, dim, tt, ttn) {
     const nvox = dim[0] * dim[1] * dim[2];
     let ml = 0;
@@ -41160,7 +42043,10 @@ var Niivue = class {
     return [cl, l];
   }
   // translate_labels()
-  // retain only the largest cluster for each region
+  /**
+   * Retains only the largest cluster for each region in a labeled volume.
+   * @internal
+   */
   largest_original_cluster_labels(bw, cl, ls) {
     const nvox = bw.length;
     const ls2bw = new Uint32Array(cl + 1).fill(0);
@@ -41195,9 +42081,10 @@ var Niivue = class {
     }
     return [mxbw, vxs];
   }
-  // given a 3D image, return a clustered label map
-  // for an explanation and optimized C code see
-  // https://github.com/seung-lab/connected-components-3d
+  /**
+   * Computes connected components labeling on a 3D image.
+   * @internal
+   */
   bwlabel(img, dim, conn = 26, binarize = false, onlyLargestClusterPerClass = false) {
     const start = Date.now();
     const nvox = dim[0] * dim[1] * dim[2];
@@ -41232,6 +42119,15 @@ var Niivue = class {
     return [cl, ls];
   }
   // bwlabel()
+  /**
+   * Create a connected component label map from a volume
+   * @param id - ID of the input volume
+   * @param conn - connectivity for clustering (6 = faces, 18 = faces + edges, 26 = faces + edges + corners)
+   * @param binarize - whether to binarize the volume before labeling
+   * @param onlyLargestClusterPerClass - retain only the largest cluster for each label
+   * @returns a new NVImage with labeled clusters, using random colormap
+   * @see {@link https://niivue.com/demos/features/clusterize.html | live demo usage}
+   */
   async createConnectedLabelImage(id, conn = 26, binarize = false, onlyLargestClusterPerClass = false) {
     const idx = this.getVolumeIndexByID(id);
     const dim = Uint32Array.from(this.volumes[idx].dims?.slice(1, 4) ?? []);
@@ -41251,6 +42147,10 @@ var Niivue = class {
   // https://github.com/Deep-MI/FastSurfer/blob/4e76bed7b11fd7e6403ddac729059ad3842b56de/FastSurferCNN/data_loader/conform.py
   // Licensed under the Apache License, Version 2.0 (the "License")
   // Crop the intensity ranges to specific min and max values.
+  /**
+   * Scales and crops a Float32 image to Uint8 range.
+   * @internal
+   */
   async scalecropUint8(img32, dst_min = 0, dst_max = 255, src_min, scale6) {
     const voxnum = img32.length;
     const img8 = new Uint8Array(voxnum);
@@ -41263,6 +42163,10 @@ var Niivue = class {
     }
     return img8;
   }
+  /**
+   * Scales and crops a Float32 image to a specified range.
+   * @internal
+   */
   async scalecropFloat32(img32, dst_min = 0, dst_max = 1, src_min, scale6) {
     const voxnum = img32.length;
     const img = new Float32Array(voxnum);
@@ -41275,8 +42179,10 @@ var Niivue = class {
     }
     return img;
   }
-  // Get offset and scale of image intensities to robustly rescale to range dst_min..dst_max.
-  // Equivalent to how mri_convert conforms images.
+  /**
+   * Computes offset and scale to robustly rescale image intensities to a target range.
+   * @internal
+   */
   getScale(volume, dst_min = 0, dst_max = 255, f_low = 0, f_high = 0.999) {
     let src_min = volume.global_min;
     let src_max = volume.global_max;
@@ -41293,13 +42199,13 @@ var Niivue = class {
         return [src_min, scale7];
       }
     }
-    const img = volume.img;
+    let img = volume.img;
     const voxnum = volume.hdr.dims[1] * volume.hdr.dims[2] * volume.hdr.dims[3];
     if (volume.hdr.scl_slope !== 1 || volume.hdr.scl_inter !== 0) {
       const srcimg = volume.img;
-      const img2 = new Float32Array(volume.img.length);
+      img = new Float32Array(volume.img.length);
       for (let i = 0; i < voxnum; i++) {
-        img2[i] = srcimg[i] * volume.hdr.scl_slope + volume.hdr.scl_inter;
+        img[i] = srcimg[i] * volume.hdr.scl_slope + volume.hdr.scl_inter;
       }
     }
     if (src_min < 0) {
@@ -41357,6 +42263,10 @@ var Niivue = class {
   }
   // Translation of nibabel mghformat.py (MIT License 2009-2019) and FastSurfer conform.py (Apache License)
   // https://github.com/nipy/nibabel/blob/a2e5dee05cf374c22670ff9fd0d385ce366eb495/nibabel/freesurfer/mghformat.py#L30
+  /**
+   * Computes output affine, voxel-to-voxel transform, and its inverse for resampling.
+   * @internal
+   */
   conformVox2Vox(inDims, inAffine, outDim = 256, outMM = 1, toRAS = false) {
     const a = inAffine.flat();
     const affine = mat4_exports.fromValues(
@@ -41410,15 +42320,34 @@ var Niivue = class {
     mat4_exports.invert(inv_vox2vox, vox2vox);
     return [out_affine, vox2vox, inv_vox2vox];
   }
-  // Create a binary byte array with a NIfTI format header as well as image data
+  /**
+   * Create a binary NIfTI file as a Uint8Array, including header and image data
+   * @param dims - image dimensions [x, y, z]
+   * @param pixDims - voxel dimensions in mm [x, y, z]
+   * @param affine - 4×4 affine transformation matrix in row-major order
+   * @param datatypeCode - NIfTI datatype code (e.g., DT_UINT8, DT_FLOAT32)
+   * @param img - image data buffer (optional)
+   * @returns a Uint8Array representing a complete NIfTI file
+   * @see {@link https://niivue.com/demos/features/conform.html | live demo usage}
+   */
   async createNiftiArray(dims = [256, 256, 256], pixDims = [1, 1, 1], affine = [1, 0, 0, -128, 0, 1, 0, -128, 0, 0, 1, -128, 0, 0, 0, 1], datatypeCode = 2 /* DT_UINT8 */, img = new Uint8Array()) {
     return await NVImage.createNiftiArray(dims, pixDims, affine, datatypeCode, img);
   }
-  // Convert a binary byte array with a NIfTI image to NiiVue's internal NVImage object
+  /**
+   * Convert a binary NIfTI file (as a Uint8Array) to an NVImage object
+   * @param bytes - binary contents of a NIfTI file
+   * @returns a Promise resolving to an NVImage object
+   * @see {@link https://niivue.com/demos/features/conform.html | live demo usage}
+   */
   async niftiArray2NVImage(bytes = new Uint8Array()) {
     return await NVImage.loadFromUrl({ url: bytes });
   }
-  // Read a NIfTI file and convert as NiiVue internal NVImage: AddVolume this does not load image to GPU
+  /**
+   * Load a NIfTI image from a URL and convert it to an NVImage object
+   * @param fnm - URL of the NIfTI file to load
+   * @returns a Promise resolving to an NVImage (not yet added to GPU or scene)
+   * @see {@link https://niivue.com/demos/features/conform.html | live demo usage}
+   */
   async loadFromUrl(fnm) {
     return await NVImage.loadFromUrl({ url: fnm });
   }
@@ -41434,7 +42363,7 @@ var Niivue = class {
    * @param isLinear - reslice with linear rather than nearest-neighbor interpolation (default true).
    * @param asFloat32 - use Float32 datatype rather than Uint8 (default false).
    * @param isRobustMinMax - clamp intensity with robust min max (~2%..98%) instead of FreeSurfer (0%..99.99%) (default false).
-   * @see {@link https://niivue.github.io/niivue/features/torso.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/torso.html | live demo usage}
    */
   async conform(volume, toRAS = false, isLinear = true, asFloat32 = false, isRobustMinMax = false) {
     const outDim = 256;
@@ -41561,7 +42490,7 @@ var Niivue = class {
   /**
    * darken crevices and brighten corners when 3D rendering drawings.
    * @param ao - amount of ambient occlusion (default 0.4)
-   * @see {@link https://niivue.github.io/niivue/features/torso.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/torso.html | live demo usage}
    */
   setRenderDrawAmbientOcclusion(ao) {
     if (!this.renderShader) {
@@ -41572,7 +42501,11 @@ var Niivue = class {
     this.gl.uniform1fv(this.renderShader.uniforms.renderDrawAmbientOcclusion, [this.renderDrawAmbientOcclusion, 1]);
     this.drawScene();
   }
-  // compatibility alias for NiiVue < 0.35
+  /**
+   * @deprecated Use {@link setColormap} instead. This alias is retained for compatibility with NiiVue < 0.35.
+   * @param id - ID of the volume
+   * @param colormap - name of the colormap to apply
+   */
   setColorMap(id, colormap) {
     this.setColormap(id, colormap);
   }
@@ -41583,7 +42516,7 @@ var Niivue = class {
    * @example
    * niivue = new Niivue()
    * niivue.setColormapNegative(niivue.volumes[1].id,"winter");
-   * @see {@link https://niivue.github.io/niivue/features/mosaics2.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/mosaics2.html | live demo usage}
    */
   setColormapNegative(id, colormapNegative) {
     const idx = this.getVolumeIndexByID(id);
@@ -41596,8 +42529,8 @@ var Niivue = class {
    * @param idModulation - the ID of the NVImage that controls bias (empty string to disable modulation)
    * @param modulateAlpha - does the modulation influence alpha transparency (values greater than 1).
    * @example niivue.setModulationImage(niivue.volumes[0].id, niivue.volumes[1].id);
-   * @see {@link https://niivue.github.io/niivue/features/modulate.html | live demo scalar usage}
-   * @see {@link https://niivue.github.io/niivue/features/modulateAfni.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/modulate.html | live demo scalar usage}
+   * @see {@link https://niivue.com/demos/features/modulateAfni.html | live demo usage}
    */
   setModulationImage(idTarget, idModulation, modulateAlpha = 0) {
     const idxTarget = this.getVolumeIndexByID(idTarget);
@@ -41613,7 +42546,7 @@ var Niivue = class {
    * adjust screen gamma. Low values emphasize shadows but can appear flat, high gamma hides shadow details.
    * @param gamma - selects luminance, default is 1
    * @example niivue.setGamma(1.0);
-   * @see {@link https://niivue.github.io/niivue/features/colormaps.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/colormaps.html | live demo usage}
    */
   setGamma(gamma = 1) {
     this.scene.gamma = gamma;
@@ -41648,7 +42581,7 @@ var Niivue = class {
    * @param id - the ID of the 4D NVImage
    * @param frame4D - frame to display (indexed from zero)
    * @example nv1.setFrame4D(nv1.volumes[0].id, 42);
-   * @see {@link https://niivue.github.io/niivue/features/timeseries.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/timeseries.html | live demo usage}
    */
   setFrame4D(id, frame4D) {
     const idx = this.getVolumeIndexByID(id);
@@ -41672,23 +42605,33 @@ var Niivue = class {
    * @param id - the ID of the 4D NVImage
    * @returns currently selected volume (indexed from 0)
    * @example nv1.getFrame4D(nv1.volumes[0].id);
-   * @see {@link https://niivue.github.io/niivue/features/timeseries.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/timeseries.html | live demo usage}
    */
   getFrame4D(id) {
     const idx = this.getVolumeIndexByID(id);
     return this.volumes[idx].frame4D;
   }
-  // not included in public docs
+  /**
+   * Returns a colormap by its name key.
+   * @internal
+   */
   colormapFromKey(name) {
     return cmapper.colormapFromKey(name);
   }
-  // not included in public docs
+  /**
+   * Retrieve a colormap with optional inversion
+   * @param lutName - name of the lookup table (LUT) colormap
+   * @param isInvert - whether to invert the colormap
+   * @returns the RGBA colormap as a Uint8ClampedArray
+   * @see {@link https://niivue.com/demos/features/colormaps.html | live demo usage}
+   */
   colormap(lutName = "", isInvert = false) {
     return cmapper.colormap(lutName, isInvert);
   }
-  // create TEXTURE1 a 2D bitmap with a nCol columns RGBA and nRow rows
-  // note a single volume can have two colormaps (positive and negative)
-  // https://github.com/niivue/niivue/blob/main/docs/development-notes/webgl.md
+  /**
+   * Creates or recreates a 2D RGBA colormap texture with specified rows and columns.
+   * @internal
+   */
   createColormapTexture(texture = null, nRow = 0, nCol = 256) {
     if (texture !== null) {
       this.gl.deleteTexture(texture);
@@ -41707,6 +42650,10 @@ var Niivue = class {
     this.gl.pixelStorei(this.gl.UNPACK_ALIGNMENT, 1);
     return texture;
   }
+  /**
+   * Adds a colormap configuration to the internal list with given parameters.
+   * @internal
+   */
   addColormapList(nm = "", mn = NaN, mx = NaN, alpha = false, neg = false, vis = true, inv = false) {
     if (nm.length < 1) {
       vis = false;
@@ -41721,7 +42668,11 @@ var Niivue = class {
       invert: inv
     });
   }
-  // not included in public docs
+  /**
+   * Rebuild and upload all colormap textures for volumes and meshes
+   * @returns the current NiiVue instance, or undefined if no colormaps are used
+   * @see {@link https://niivue.com/demos/features/mesh.stats.html | live demo usage}
+   */
   refreshColormaps() {
     this.colormapLists = [];
     if (this.volumes.length < 1 && this.meshes.length < 1) {
@@ -41825,7 +42776,10 @@ var Niivue = class {
     this.gl.texSubImage2D(this.gl.TEXTURE_2D, 0, 0, 0, 256, nMaps + 1, this.gl.RGBA, this.gl.UNSIGNED_BYTE, luts);
     return this;
   }
-  // not included in public docs
+  /**
+   * Calculates volume scaling factors and voxel dimensions for rendering.
+   * @internal
+   */
   sliceScale(forceVox = false) {
     let dimsMM = this.screenFieldOfViewMM(0 /* AXIAL */);
     if (forceVox) {
@@ -41839,7 +42793,11 @@ var Niivue = class {
     const vox = [this.back.dims[1], this.back.dims[2], this.back.dims[3]];
     return { volScale, vox, longestAxis, dimsMM };
   }
-  // return tile at canvas coordinate(x,y)
+  /**
+   * Returns the index of the tile containing the given (x, y) screen coordinates.
+   * Returns -1 if the coordinates are outside all tiles.
+   * @internal
+   */
   tileIndex(x, y) {
     for (let i = 0; i < this.screenSlices.length; i++) {
       const ltwh = this.screenSlices[i].leftTopWidthHeight;
@@ -41849,8 +42807,10 @@ var Niivue = class {
     }
     return -1;
   }
-  // not included in public docs
-  // report if screen space coordinates correspond with a 3D rendering
+  /**
+   * Returns the index of the render tile containing (x, y) screen coordinates, or -1 if none.
+   * @internal
+   */
   inRenderTile(x, y) {
     const idx = this.tileIndex(x, y);
     if (idx >= 0 && this.screenSlices[idx].axCorSag === 4 /* RENDER */) {
@@ -41858,9 +42818,10 @@ var Niivue = class {
     }
     return -1;
   }
-  // not included in public docs
-  // if clip plane is active, change depth of clip plane
-  // otherwise, set zoom factor for rendering size
+  /**
+   * Adjusts clip plane depth if active, else zooms render size.
+   * @internal
+   */
   sliceScroll3D(posChange = 0) {
     if (posChange === 0) {
       return;
@@ -41887,8 +42848,10 @@ var Niivue = class {
     }
     this.drawScene();
   }
-  // not included in public docs
-  // if a thumbnail is loaded: close thumbnail and release memory
+  /**
+   * Deletes loaded thumbnail texture and frees memory.
+   * @internal
+   */
   deleteThumbnail() {
     if (!this.bmpTexture) {
       return;
@@ -41897,7 +42860,10 @@ var Niivue = class {
     this.bmpTexture = null;
     this.thumbnailVisible = false;
   }
-  // not included in public docs
+  /**
+   * Checks if (x,y) is within the visible graph plotting area.
+   * @internal
+   */
   inGraphTile(x, y) {
     if (this.graph.opacity <= 0 || this.volumes.length < 1 || this.volumes[0].nFrame4D < 1 || !this.graph.plotLTWH) {
       return false;
@@ -41908,7 +42874,10 @@ var Niivue = class {
     const pos = [(x - this.graph.LTWH[0]) / this.graph.LTWH[2], (y - this.graph.LTWH[1]) / this.graph.LTWH[3]];
     return pos[0] > 0 && pos[1] > 0 && pos[0] <= 1 && pos[1] <= 1;
   }
-  // update drawBitmap if it differs from clickTosegmentBitmap
+  /**
+   * Updates drawBitmap to match clickToSegmentGrowingBitmap if they differ in content and size.
+   * @internal
+   */
   updateBitmapFromClickToSegment() {
     if (this.clickToSegmentGrowingBitmap === null) {
       return;
@@ -41924,6 +42893,10 @@ var Niivue = class {
       this.drawBitmap[i] = this.clickToSegmentGrowingBitmap[i];
     }
   }
+  /**
+   * Calculates the sum of all voxel values in the given bitmap.
+   * @internal
+   */
   sumBitmap(img) {
     let sum = 0;
     for (let i = 0; i < img.length; i++) {
@@ -41931,6 +42904,13 @@ var Niivue = class {
     }
     return sum;
   }
+  /**
+   * Performs click-to-segment operation based on user click within a specified tile.
+   * Validates input, computes voxel coordinates from screen position, and applies flood fill
+   * with intensity-based thresholding and optional growing mask.
+   * Updates drawing bitmaps and triggers redraw and descriptive stats calculation.
+   * @internal
+   */
   doClickToSegment(options) {
     const { tileIndex } = options;
     if (tileIndex < 0 || tileIndex >= this.screenSlices.length) {
@@ -42022,8 +43002,11 @@ var Niivue = class {
     }
     this.createOnLocationChange(axCorSag);
   }
-  // not included in public docs
-  // handle mouse click event on canvas
+  /**
+   * Handles mouse click on canvas by updating crosshair position, drawing, or segmenting based on current mode and location.
+   * Supports thumbnail loading, graph interaction, 3D slice scrolling, and click-to-segment with flood fill.
+   * @internal
+   */
   mouseClick(x, y, posChange = 0, isDelta = true) {
     x *= this.uiData.dpr;
     y *= this.uiData.dpr;
@@ -42162,8 +43145,10 @@ var Niivue = class {
       return;
     }
   }
-  // not included in public docs
-  // draw 10cm ruler on a 2D tile
+  /**
+   * Draws a 10cm ruler on a 2D slice tile based on screen FOV and slice dimensions.
+   * @internal
+   */
   drawRuler() {
     let fovMM = [];
     let ltwh = [];
@@ -42194,8 +43179,10 @@ var Niivue = class {
     this.drawRuler10cm(startXYendXY, outlineColor, thick + 1);
     this.drawRuler10cm(startXYendXY, this.opts.rulerColor, thick);
   }
-  // not included in public docs
-  // draw 10cm ruler at desired coordinates
+  /**
+   * Draws a 10cm ruler at specified coordinates with given color and width.
+   * @internal
+   */
   drawRuler10cm(startXYendXY, rulerColor, rulerWidth = 1) {
     if (!this.lineShader) {
       throw new Error("lineShader undefined");
@@ -42224,8 +43211,10 @@ var Niivue = class {
     }
     this.gl.bindVertexArray(this.unusedVAO);
   }
-  // not included in public docs
-  // returns vec4: XYZi where XYZ is location in millimeters, and i tile index
+  /**
+   * Returns vec4 with XYZ millimeter coordinates and tile index for given screen XY.
+   * @internal
+   */
   screenXY2mm(x, y, forceSlice = -1) {
     let texFrac;
     for (let s = 0; s < this.screenSlices.length; s++) {
@@ -42250,7 +43239,10 @@ var Niivue = class {
     }
     return vec4_exports.fromValues(NaN, NaN, NaN, NaN);
   }
-  // not included in public docs
+  /**
+   * Update scene pan position during drag based on start and end screen coordinates.
+   * @internal
+   */
   dragForPanZoom(startXYendXY) {
     const endMM = this.screenXY2mm(startXYendXY[2], startXYendXY[3]);
     if (isNaN(endMM[0])) {
@@ -42268,10 +43260,17 @@ var Niivue = class {
     this.scene.pan2Dxyzmm[2] = this.uiData.pan2DxyzmmAtMouseDown[2] + zoom * v[2];
     this.canvas.focus();
   }
+  /**
+   * Handle center-button drag as pan and zoom.
+   * @internal
+   */
   dragForCenterButton(startXYendXY) {
     this.dragForPanZoom(startXYendXY);
   }
-  // for slicer3D vertical dragging adjusts zoom
+  /**
+   * Update 3D slicer zoom and pan based on drag movement.
+   * @internal
+   */
   dragForSlicer3D(startXYendXY) {
     let zoom = this.uiData.pan2DxyzmmAtMouseDown[3];
     const y = startXYendXY[3] - startXYendXY[1];
@@ -42289,9 +43288,11 @@ var Niivue = class {
     this.scene.pan2Dxyzmm[1] += zoomChange * mm[1];
     this.scene.pan2Dxyzmm[2] += zoomChange * mm[2];
   }
-  // not included in public docs
-  // draw line between start/end points and text to report length
-  drawMeasurementTool(startXYendXY) {
+  /**
+   * Draw a measurement line with end caps and length text on a 2D tile.
+   * @internal
+   */
+  drawMeasurementTool(startXYendXY, isDrawText = true) {
     function extendTo(x0, y0, x1, y1, distance4) {
       const x = x0 - x1;
       const y = y0 - y1;
@@ -42370,18 +43371,157 @@ var Niivue = class {
           textCoords = startXYendXY;
           break;
       }
-      this.drawTextBetween(
-        textCoords,
-        stringMM,
-        this.opts.measureTextHeight / this.opts.textHeight,
-        this.opts.measureTextColor
-      );
+      if (isDrawText) {
+        this.drawTextBetween(
+          textCoords,
+          stringMM,
+          this.opts.measureTextHeight / 0.06,
+          // <- TODO measureFontPx
+          this.opts.measureTextColor
+        );
+      }
     }
     gl.bindVertexArray(this.unusedVAO);
   }
-  // not included in public docs
-  // draw a rectangle at specified location
-  // unless Alpha is > 0, default color is opts.crosshairColor
+  /**
+   * Draw angle measurement tool with two lines and angle display.
+   * @internal
+   */
+  drawAngleMeasurementTool() {
+    if (this.uiData.angleState === "drawing_first_line") {
+      this.drawMeasurementTool(
+        [this.uiData.dragStart[0], this.uiData.dragStart[1], this.uiData.dragEnd[0], this.uiData.dragEnd[1]],
+        false
+      );
+    } else if (this.uiData.angleState === "drawing_second_line") {
+      this.drawMeasurementTool(this.uiData.angleFirstLine, false);
+      this.drawMeasurementTool(
+        [
+          this.uiData.angleFirstLine[2],
+          // start from end of first line
+          this.uiData.angleFirstLine[3],
+          this.uiData.dragEnd[0],
+          // to current mouse position
+          this.uiData.dragEnd[1]
+        ],
+        false
+      );
+      this.drawAngleText();
+    } else if (this.uiData.angleState === "complete") {
+      this.drawMeasurementTool(this.uiData.angleFirstLine, false);
+      const secondLine = [
+        this.uiData.angleFirstLine[2],
+        // start from end of first line
+        this.uiData.angleFirstLine[3],
+        this.uiData.dragEnd[0],
+        // to final position
+        this.uiData.dragEnd[1]
+      ];
+      this.drawMeasurementTool(secondLine, false);
+      this.drawAngleText();
+    }
+  }
+  /**
+   * Calculate and draw angle text at the intersection of two lines.
+   * @internal
+   */
+  drawAngleText() {
+    const line1 = this.uiData.angleFirstLine;
+    const line2 = [
+      this.uiData.angleFirstLine[2],
+      // start from end of first line
+      this.uiData.angleFirstLine[3],
+      this.uiData.dragEnd[0],
+      // to current mouse position
+      this.uiData.dragEnd[1]
+    ];
+    const angle3 = this.calculateAngleBetweenLines(line1, line2);
+    const intersectionX = this.uiData.angleFirstLine[2];
+    const intersectionY = this.uiData.angleFirstLine[3];
+    const angleText = `${angle3.toFixed(1)}\xB0`;
+    this.drawTextBetween(
+      [intersectionX, intersectionY, intersectionX + 1, intersectionY + 1],
+      angleText,
+      this.opts.measureTextHeight / 0.06,
+      this.opts.measureTextColor
+    );
+  }
+  /**
+   * Calculate angle between two lines in degrees.
+   * @internal
+   */
+  calculateAngleBetweenLines(line1, line2) {
+    const intersectionX = line1[2];
+    const intersectionY = line1[3];
+    const v1x = line1[0] - intersectionX;
+    const v1y = line1[1] - intersectionY;
+    const v2x = line2[2] - intersectionX;
+    const v2y = line2[3] - intersectionY;
+    const dot4 = v1x * v2x + v1y * v2y;
+    const mag1 = Math.sqrt(v1x * v1x + v1y * v1y);
+    const mag2 = Math.sqrt(v2x * v2x + v2y * v2y);
+    if (mag1 === 0 || mag2 === 0) {
+      return 0;
+    }
+    const cosAngle = Math.max(-1, Math.min(1, dot4 / (mag1 * mag2)));
+    const angleRad = Math.acos(cosAngle);
+    const angleDeg = angleRad * (180 / Math.PI);
+    return angleDeg;
+  }
+  /**
+   * Reset the angle measurement state.
+   * @internal
+   */
+  resetAngleMeasurement() {
+    this.uiData.angleState = "none";
+    this.uiData.angleFirstLine = [0, 0, 0, 0];
+  }
+  /**
+   * Set the drag mode for mouse interactions.
+   * @param mode - The drag mode to set ('none', 'contrast', 'measurement', 'angle', 'pan', 'slicer3D', 'callbackOnly', 'roiSelection')
+   */
+  setDragMode(mode) {
+    if (typeof mode === "string") {
+      switch (mode) {
+        case "none":
+          this.opts.dragMode = 0 /* none */;
+          break;
+        case "contrast":
+          this.opts.dragMode = 1 /* contrast */;
+          break;
+        case "measurement":
+          this.opts.dragMode = 2 /* measurement */;
+          break;
+        case "angle":
+          this.opts.dragMode = 7 /* angle */;
+          break;
+        case "pan":
+          this.opts.dragMode = 3 /* pan */;
+          break;
+        case "slicer3D":
+          this.opts.dragMode = 4 /* slicer3D */;
+          break;
+        case "callbackOnly":
+          this.opts.dragMode = 5 /* callbackOnly */;
+          break;
+        case "roiSelection":
+          this.opts.dragMode = 6 /* roiSelection */;
+          break;
+        default:
+          console.warn(`Unknown drag mode: ${mode}`);
+          return;
+      }
+    } else {
+      this.opts.dragMode = mode;
+    }
+    if (this.opts.dragMode !== 7 /* angle */) {
+      this.resetAngleMeasurement();
+    }
+  }
+  /**
+   * Draw a rectangle or outline at given position with specified color or default crosshair color.
+   * @internal
+   */
   drawRect(leftTopWidthHeight, lineColor = [1, 0, 0, -1]) {
     if (lineColor[3] < 0) {
       lineColor = this.opts.crosshairColor;
@@ -42426,6 +43566,10 @@ var Niivue = class {
       this.gl.bindVertexArray(this.unusedVAO);
     }
   }
+  /**
+   * Draw a circle or outline at given position with specified color or default crosshair color.
+   * @internal
+   */
   drawCircle(leftTopWidthHeight, circleColor = this.opts.fontColor, fillPercent = 1) {
     if (!this.circleShader) {
       throw new Error("circleShader undefined");
@@ -42447,8 +43591,10 @@ var Niivue = class {
     this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
     this.gl.bindVertexArray(this.unusedVAO);
   }
-  // not included in public docs
-  // draw a rectangle at desired location
+  /**
+   * Draw selection box: circle if ROI selection mode, else rectangle.
+   * @internal
+   */
   drawSelectionBox(leftTopWidthHeight) {
     if (this.opts.dragMode === 6 /* roiSelection */) {
       this.drawCircle(leftTopWidthHeight, this.opts.selectionBoxColor, 0.1);
@@ -42456,14 +43602,24 @@ var Niivue = class {
     }
     this.drawRect(leftTopWidthHeight, this.opts.selectionBoxColor);
   }
-  // not included in public docs
-  // return canvas pixels available for tiles (e.g without colorbar)
+  /**
+   * Get canvas height available for tiles (excludes colorbar).
+   * @internal
+   */
   effectiveCanvasHeight() {
     return this.gl.canvas.height - this.colorbarHeight;
   }
+  /**
+   * Get canvas width available for tiles (excludes legend panel).
+   * @internal
+   */
   effectiveCanvasWidth() {
     return this.gl.canvas.width - this.getLegendPanelWidth();
   }
+  /**
+   * Get all 3D labels from document and connectome meshes.
+   * @internal
+   */
   getAllLabels() {
     const connectomes = this.meshes.filter((m) => m.type === "connectome" /* CONNECTOME */);
     const meshNodes = connectomes.flatMap((m) => m.nodes);
@@ -42472,6 +43628,10 @@ var Niivue = class {
     const labels = [...this.document.labels, ...definedMeshLabels];
     return labels;
   }
+  /**
+   * Get all visible connectome and non-anchored mesh labels.
+   * @internal
+   */
   getConnectomeLabels() {
     const connectomes = this.meshes.filter((m) => m.type === "connectome" /* CONNECTOME */ && m.showLegend !== false);
     const meshNodes = connectomes.flatMap((m) => m.nodes);
@@ -42494,6 +43654,10 @@ var Niivue = class {
     }
     return Array.from(nonAnchoredLabelSet);
   }
+  /**
+   * Calculate bullet margin width based on widest bullet scale and tallest label height.
+   * @internal
+   */
   getBulletMarginWidth() {
     let bulletMargin = 0;
     const labels = this.getConnectomeLabels();
@@ -42502,31 +43666,36 @@ var Niivue = class {
     }
     const widestBulletScale = labels.length === 1 ? labels[0].style.bulletScale : labels.reduce((a, b) => a.style.bulletScale > b.style.bulletScale ? a : b).style.bulletScale;
     const tallestLabel = labels.length === 1 ? labels[0] : labels.reduce((a, b) => {
-      const aSize = this.opts.textHeight * this.gl.canvas.height * a.style.textScale;
-      const bSize = this.opts.textHeight * this.gl.canvas.height * b.style.textScale;
+      const aSize = this.fontPx * a.style.textScale;
+      const bSize = this.fontPx * b.style.textScale;
       const taller = this.textHeight(aSize, a.text) > this.textHeight(bSize, b.text) ? a : b;
       return taller;
     });
-    const size = this.opts.textHeight * this.gl.canvas.height * tallestLabel.style.textScale;
+    const size = this.fontPx * tallestLabel.style.textScale;
     bulletMargin = this.textHeight(size, tallestLabel.text) * widestBulletScale;
     bulletMargin += size;
     return bulletMargin;
   }
+  /**
+   * Calculate width of legend panel based on labels and bullet margin.
+   * Returns 0 if legend is hidden or too wide for canvas.
+   * @internal
+   */
   getLegendPanelWidth() {
     const labels = this.getConnectomeLabels();
     if (!this.opts.showLegend || labels.length === 0) {
       return 0;
     }
     const scale6 = 1;
-    const horizontalMargin = this.opts.textHeight * this.gl.canvas.height * scale6;
+    const horizontalMargin = this.fontPx * scale6;
     let width = 0;
     const longestLabel = labels.reduce((a, b) => {
-      const aSize = this.opts.textHeight * this.gl.canvas.height * a.style.textScale;
-      const bSize = this.opts.textHeight * this.gl.canvas.height * b.style.textScale;
+      const aSize = this.fontPx * a.style.textScale;
+      const bSize = this.fontPx * b.style.textScale;
       const longer = this.textWidth(aSize, a.text) > this.textWidth(bSize, b.text) ? a : b;
       return longer;
     });
-    const longestTextSize = this.opts.textHeight * this.gl.canvas.height * longestLabel.style.textScale;
+    const longestTextSize = this.fontPx * longestLabel.style.textScale;
     const longestTextLength = this.textWidth(longestTextSize, longestLabel.text);
     const bulletMargin = this.getBulletMarginWidth();
     if (longestTextLength) {
@@ -42538,26 +43707,33 @@ var Niivue = class {
     }
     return width;
   }
-  getLegendPanelHeight() {
+  /**
+   * Calculate legend panel height based on labels and scale.
+   * @internal
+   */
+  getLegendPanelHeight(panelScale = 1) {
     const labels = this.getConnectomeLabels();
     let height = 0;
-    const verticalMargin = this.opts.textHeight * this.gl.canvas.height;
+    const verticalMargin = this.fontPx;
     for (const label of labels) {
-      const labelSize = this.opts.textHeight * this.gl.canvas.height * label.style.textScale;
+      const labelSize = this.fontPx * label.style.textScale * panelScale;
       const textHeight = this.textHeight(labelSize, label.text);
       height += textHeight;
     }
     if (height) {
-      height += verticalMargin / 2 * (labels.length + 1);
+      height += verticalMargin / 2 * (labels.length + 1) * panelScale;
     }
     return height;
   }
-  // not included in public docs
-  // determine canvas pixels required for colorbar
+  /**
+   * Calculate and reserve canvas area for colorbar panel.
+   * @internal
+   */
   reserveColorbarPanel() {
-    let txtHt = Math.max(this.opts.textHeight, 0.01);
-    txtHt = txtHt * Math.min(this.gl.canvas.height, this.gl.canvas.width);
-    const fullHt = 3 * txtHt;
+    const fullHt = 3 * this.fontPx;
+    if (fullHt < 0) {
+      return [0, 0, 0, 0];
+    }
     const widthPercentage = this.opts.colorbarWidth > 0 && this.opts.colorbarWidth <= 1 ? this.opts.colorbarWidth : 1;
     const width = widthPercentage * this.gl.canvas.width;
     const leftTopWidthHeight = [
@@ -42570,14 +43746,18 @@ var Niivue = class {
     this.colorbarHeight = leftTopWidthHeight[3] + 1;
     return leftTopWidthHeight;
   }
-  // not included in public docs
-  // low level code to draw a single colorbar
+  /**
+   * Render a single colorbar with optional negative coloring and alpha threshold ticks.
+   * @internal
+   */
   drawColorbarCore(layer = 0, leftTopWidthHeight = [0, 0, 0, 0], isNegativeColor = false, min4 = 0, max5 = 1, isAlphaThreshold) {
     if (leftTopWidthHeight[2] <= 0 || leftTopWidthHeight[3] <= 0) {
       return;
     }
-    let txtHt = Math.max(this.opts.textHeight, 0.01);
-    txtHt = txtHt * Math.min(this.gl.canvas.height, this.gl.canvas.width);
+    const txtHt = this.fontPx;
+    if (txtHt <= 0) {
+      return;
+    }
     let margin = txtHt;
     const fullHt = 3 * txtHt;
     let barHt = txtHt;
@@ -42658,8 +43838,10 @@ var Niivue = class {
       this.drawRect(tticLTWH);
     }
   }
-  // not included in public docs
-  // high level code to draw colorbar(s)
+  /**
+   * Draw all visible colorbars side by side in the reserved colorbar panel area.
+   * @internal
+   */
   drawColorbar() {
     const maps = this.colormapLists;
     const nmaps = maps.length;
@@ -42676,9 +43858,10 @@ var Niivue = class {
       return;
     }
     let leftTopWidthHeight = this.reserveColorbarPanel();
-    let txtHt = Math.max(this.opts.textHeight, 0.01);
-    txtHt = txtHt * Math.min(this.gl.canvas.height, this.gl.canvas.width);
-    const fullHt = 3 * txtHt;
+    const fullHt = 3 * this.fontPx;
+    if (fullHt < 0) {
+      return;
+    }
     let wid = leftTopWidthHeight[2] / nVisible;
     if (leftTopWidthHeight[2] <= 0 || leftTopWidthHeight[3] <= 0) {
       wid = this.gl.canvas.width / nVisible;
@@ -42700,7 +43883,10 @@ var Niivue = class {
       leftTopWidthHeight[0] += wid;
     }
   }
-  // not included in public docs
+  /**
+   * Calculate pixel width of text string based on glyph advances at given scale.
+   * @internal
+   */
   textWidth(scale6, str6) {
     if (!str6) {
       return 0;
@@ -42712,6 +43898,10 @@ var Niivue = class {
     }
     return w;
   }
+  /**
+   * Calculate pixel height of text based on tallest glyph at given scale.
+   * @internal
+   */
   textHeight(scale6, str6) {
     if (!str6) {
       return 0;
@@ -42722,7 +43912,10 @@ var Niivue = class {
     const height = tallest.lbwh[3];
     return scale6 * height;
   }
-  // not included in public docs
+  /**
+   * Render a single character glyph at specified position and scale; returns advance width.
+   * @internal
+   */
   drawChar(xy, scale6, char) {
     if (!this.fontShader) {
       throw new Error("fontShader undefined");
@@ -42738,7 +43931,10 @@ var Niivue = class {
     this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
     return scale6 * metrics.xadv;
   }
-  // not included in public docs
+  /**
+   * Render loading text centered on the canvas.
+   * @internal
+   */
   drawLoadingText(text) {
     if (!text) {
       return;
@@ -42751,16 +43947,19 @@ var Niivue = class {
     this.gl.enable(this.gl.BLEND);
     this.drawTextBelow([this.canvas.width / 2, this.canvas.height / 2], text, 3);
   }
-  // not included in public docs
+  /**
+   * Render a string of text at specified canvas coordinates with scaling and optional color.
+   * @internal
+   */
   drawText(xy, str6, scale6 = 1, color = null) {
-    if (this.opts.textHeight <= 0) {
+    if (this.fontPx <= 0) {
       return;
     }
     if (!this.fontShader) {
       throw new Error("fontShader undefined");
     }
     this.fontShader.use(this.gl);
-    const size = this.opts.textHeight * Math.min(this.gl.canvas.height, this.gl.canvas.width) * scale6;
+    const size = this.fontPx * scale6;
     this.gl.enable(this.gl.BLEND);
     this.gl.uniform2f(this.fontShader.uniforms.canvasWidthHeight, this.gl.canvas.width, this.gl.canvas.height);
     if (color === null) {
@@ -42777,38 +43976,50 @@ var Niivue = class {
     }
     this.gl.bindVertexArray(this.unusedVAO);
   }
-  // not included in public docs
+  /**
+   * Draw text right-aligned to the given coordinates, vertically centered on y.
+   * @internal
+   */
   drawTextRight(xy, str6, scale6 = 1, color = null) {
-    if (this.opts.textHeight <= 0) {
+    if (this.fontPx <= 0) {
       return;
     }
-    xy[1] -= 0.5 * this.opts.textHeight * this.gl.canvas.height;
+    xy[1] -= 0.5 * this.fontPx;
     this.drawText(xy, str6, scale6, color);
   }
-  // not included in public docs
+  /**
+   * Draw text left-aligned to the given coordinates, vertically centered on y.
+   * @internal
+   */
   drawTextLeft(xy, str6, scale6 = 1, color = null) {
-    if (this.opts.textHeight <= 0) {
+    if (this.fontPx <= 0) {
       return;
     }
-    const size = this.opts.textHeight * this.gl.canvas.height * scale6;
+    const size = this.fontPx * scale6;
     xy[0] -= this.textWidth(size, str6);
     xy[1] -= 0.5 * size;
     this.drawText(xy, str6, scale6, color);
   }
-  // not included in public docs
+  /**
+   * Draw text right-aligned and below the given coordinates.
+   * @internal
+   */
   drawTextRightBelow(xy, str6, scale6 = 1, color = null) {
-    if (this.opts.textHeight <= 0) {
+    if (this.fontPx <= 0) {
       return;
     }
     this.drawText(xy, str6, scale6, color);
   }
-  // not included in public docs
+  /**
+   * Draw text horizontally centered between start and end points with a semi-transparent background.
+   * @internal
+   */
   drawTextBetween(startXYendXY, str6, scale6 = 1, color = null) {
-    if (this.opts.textHeight <= 0) {
+    if (this.fontPx <= 0) {
       return;
     }
     const xy = [(startXYendXY[0] + startXYendXY[2]) * 0.5, (startXYendXY[1] + startXYendXY[3]) * 0.5];
-    const size = this.opts.textHeight * this.gl.canvas.height * scale6;
+    const size = this.fontPx * scale6;
     const w = this.textWidth(size, str6);
     xy[0] -= 0.5 * w;
     xy[1] -= 0.5 * size;
@@ -42825,19 +44036,22 @@ var Niivue = class {
     this.drawRect(LTWH, clr);
     this.drawText(xy, str6, scale6, color);
   }
-  // not included in public docs
+  /**
+   * Draw text horizontally centered below a specified (x,y) position with canvas boundary clamping.
+   * @internal
+   */
   drawTextBelow(xy, str6, scale6 = 1, color = null) {
-    if (this.opts.textHeight <= 0) {
+    if (this.fontPx <= 0) {
       return;
     }
     if (!this.canvas) {
       throw new Error("canvas undefined");
     }
-    let size = this.opts.textHeight * this.gl.canvas.height * scale6;
+    let size = this.fontPx * scale6;
     let width = this.textWidth(size, str6);
     if (width > this.canvas.width) {
       scale6 *= (this.canvas.width - 2) / width;
-      size = this.opts.textHeight * this.gl.canvas.height * scale6;
+      size = this.fontPx * scale6;
       width = this.textWidth(size, str6);
     }
     xy[0] -= 0.5 * this.textWidth(size, str6);
@@ -42845,7 +44059,10 @@ var Niivue = class {
     xy[0] = Math.min(xy[0], this.canvas.width - width - 1);
     this.drawText(xy, str6, scale6, color);
   }
-  // not included in public docs
+  /**
+   * Update texture interpolation mode (nearest or linear) for background or overlay layer.
+   * @internal
+   */
   updateInterpolation(layer, isForceLinear = false) {
     let interp = this.gl.LINEAR;
     if (!isForceLinear && this.opts.isNearestInterpolation) {
@@ -42864,7 +44081,11 @@ var Niivue = class {
       this.gl.texParameteri(this.gl.TEXTURE_3D, this.gl.TEXTURE_MAG_FILTER, interp);
     }
   }
-  // not included in public docs
+  /**
+   * Enable or disable atlas outline overlay
+   * @param isOutline - number 0 to 1 for outline opacity
+   * @see {@link https://niivue.com/demos/features/atlas.sparse.html | live demo usage}
+   */
   setAtlasOutline(isOutline) {
     this.opts.atlasOutline = isOutline;
     this.updateGLVolume();
@@ -42874,7 +44095,7 @@ var Niivue = class {
    * select between nearest and linear interpolation for voxel based images
    * @param isNearest - whether nearest neighbor interpolation is used, else linear interpolation
    * @example niivue.setInterpolation(true);
-   * @see {@link https://niivue.github.io/niivue/features/draw2.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/draw2.html | live demo usage}
    */
   setInterpolation(isNearest) {
     this.opts.isNearestInterpolation = isNearest;
@@ -42887,7 +44108,11 @@ var Niivue = class {
     }
     this.drawScene();
   }
-  // not included in public docs
+  /**
+   * Computes 2D model-view-projection and related matrices for rendering a slice of a 3D volume.
+   * Configures viewport and accounts for radiological orientation, depth clipping, and camera rotation.
+   * @internal
+   */
   calculateMvpMatrix2D(leftTopWidthHeight, mn, mx, clipTolerance = Infinity, clipDepth = 0, azimuth = 0, elevation = 0, isRadiolgical) {
     const gl = this.gl;
     gl.viewport(
@@ -42944,7 +44169,10 @@ var Niivue = class {
       fovMM
     };
   }
-  // not included in public docs
+  /**
+   * Reorders the components of a 3D vector based on the slice orientation (axial, coronal, or sagittal).
+   * @internal
+   */
   swizzleVec3MM(v3, axCorSag) {
     if (axCorSag === 1 /* CORONAL */) {
       v3 = swizzleVec3(v3, [0, 2, 1]);
@@ -42953,13 +44181,18 @@ var Niivue = class {
     }
     return v3;
   }
-  // not included in public docs
+  /**
+   * Returns the swizzled field of view for the given slice orientation.
+   * @internal
+   */
   screenFieldOfViewVox(axCorSag = 0) {
     const fov = vec3_exports.clone(this.volumeObject3D.fieldOfViewDeObliqueMM);
     return this.swizzleVec3MM(fov, axCorSag);
   }
-  // not included in public docs
-  // determine height/width of image in millimeters
+  /**
+   * Returns the field of view in millimeters for the given slice orientation.
+   * @internal
+   */
   screenFieldOfViewMM(axCorSag = 0, forceSliceMM = false) {
     if (this.volumes.length < 1) {
       let mnMM2 = vec3_exports.fromValues(this.extentsMin[0], this.extentsMin[1], this.extentsMin[2]);
@@ -42983,7 +44216,10 @@ var Niivue = class {
     vec3_exports.subtract(fovMM, mxMM, mnMM);
     return fovMM;
   }
-  // not included in public docs
+  /**
+   * Returns extended voxel-aligned field of view and bounds for the given slice orientation.
+   * @internal
+   */
   screenFieldOfViewExtendedVox(axCorSag = 0) {
     const extentsMinOrtho = this.volumes[0].extentsMinOrtho;
     const extentsMaxOrtho = this.volumes[0].extentsMaxOrtho;
@@ -42996,7 +44232,10 @@ var Niivue = class {
     vec3_exports.subtract(fovMM, mxMM, mnMM);
     return { mnMM, mxMM, rotation, fovMM };
   }
-  // not included in public docs
+  /**
+   * Returns extended millimeter-aligned field of view and bounds for the given slice orientation.
+   * @internal
+   */
   screenFieldOfViewExtendedMM(axCorSag = 0) {
     if (this.volumes.length < 1) {
       let mnMM2 = vec3_exports.fromValues(this.extentsMin[0], this.extentsMin[1], this.extentsMin[2]);
@@ -43022,8 +44261,10 @@ var Niivue = class {
     vec3_exports.subtract(fovMM, mxMM, mnMM);
     return { mnMM, mxMM, rotation, fovMM };
   }
-  // not included in public docs
-  // show text labels for L/R, A/P, I/S dimensions
+  /**
+   * Draws anatomical orientation labels (e.g., A/P/L/R) for the given slice view.
+   * @internal
+   */
   drawSliceOrientationText(leftTopWidthHeight, axCorSag, padLeftTop = [NaN, NaN]) {
     this.gl.viewport(0, 0, this.gl.canvas.width, this.gl.canvas.height);
     let topText = "S";
@@ -43041,7 +44282,7 @@ var Niivue = class {
     let drawBelow = true;
     let drawRight = true;
     if (!isNaN(padLeftTop[0])) {
-      const ht = this.opts.textHeight * this.gl.canvas.height + 2;
+      const ht = this.fontPx + 2;
       if (padLeftTop[1] > ht) {
         this.drawTextBelow(
           [leftTopWidthHeight[0] + leftTopWidthHeight[2] * 0.5, leftTopWidthHeight[1] + padLeftTop[1] - ht],
@@ -43065,7 +44306,10 @@ var Niivue = class {
       this.drawTextRight([leftTopWidthHeight[0], leftTopWidthHeight[1] + leftTopWidthHeight[3] * 0.5], leftText);
     }
   }
-  // not included in public docs
+  /**
+   * Computes a plane in mm space for a given slice orientation and depth.
+   * @internal
+   */
   xyMM2xyzMM(axCorSag, sliceFrac) {
     let sliceDim = 2;
     if (axCorSag === 1 /* CORONAL */) {
@@ -43099,8 +44343,10 @@ var Niivue = class {
     AxyzMxy[4] = yMult;
     return AxyzMxy;
   }
-  // not included in public docs
-  // draw 2D tile
+  /**
+   * Draw a 2D slice tile with appropriate orientation, zoom, pan, and optional mesh overlay.
+   * @internal
+   */
   draw2DMain(leftTopWidthHeight, axCorSag, customMM = NaN) {
     let frac2mmTexture = new Float32Array([0, 0, 0]);
     if (this.volumes.length > 0) {
@@ -43223,6 +44469,9 @@ var Niivue = class {
       if (this.opts.isV1SliceShader) {
         shader = this.sliceV1Shader;
       }
+      if (this.customSliceShader) {
+        shader = this.customSliceShader;
+      }
       if (!shader) {
         throw new Error("slice Shader undefined");
       }
@@ -43292,6 +44541,10 @@ var Niivue = class {
     }
     this.readyForSync = true;
   }
+  /**
+   * Draw a 2D slice tile with optional custom size and orientation text.
+   * @internal
+   */
   draw2D(leftTopWidthHeight, axCorSag, customMM = NaN, imageWidthHeight = [NaN, NaN]) {
     const padLeftTop = [NaN, NaN];
     if (imageWidthHeight[0] === Infinity) {
@@ -43325,8 +44578,10 @@ var Niivue = class {
       this.drawSliceOrientationText(leftTopWidthHeight, axCorSag, padLeftTop);
     }
   }
-  // not included in public docs
-  // determine 3D model view projection matrix
+  /**
+   * Computes 3D model-view-projection matrices based on view angles and canvas size.
+   * @internal
+   */
   calculateMvpMatrix(_unused, leftTopWidthHeight = [0, 0, 0, 0], azimuth, elevation) {
     if (leftTopWidthHeight[2] === 0 || leftTopWidthHeight[3] === 0) {
       leftTopWidthHeight = [0, 0, this.gl.canvas.width, this.gl.canvas.height];
@@ -43359,7 +44614,11 @@ var Niivue = class {
     mat4_exports.multiply(modelViewProjectionMatrix, projectionMatrix, modelMatrix);
     return [modelViewProjectionMatrix, modelMatrix, normalMatrix];
   }
-  // not included in public docs
+  /**
+   * Computes the model transformation matrix for the given azimuth and elevation.
+   * Applies optional oblique RAS rotation if available.
+   * @internal
+   */
   calculateModelMatrix(azimuth, elevation) {
     if (!this.back) {
       throw new Error("back undefined");
@@ -43374,8 +44633,11 @@ var Niivue = class {
     }
     return modelMatrix;
   }
-  // not included in public docs
-  // calculate the near-far direction from the camera's perspective
+  /**
+   * Returns the normalized near-to-far ray direction for the given view angles.
+   * Ensures components are nonzero to avoid divide-by-zero errors.
+   * @internal
+   */
   calculateRayDirection(azimuth, elevation) {
     const modelMatrix = this.calculateModelMatrix(azimuth, elevation);
     const projectionMatrix = mat4_exports.fromValues(1, 0, 0, 0, 0, -1, 0, 0, 0, 0, -1, 0, 0, 0, 0, 1);
@@ -43399,7 +44661,11 @@ var Niivue = class {
     }
     return rayDir;
   }
-  // not included in public docs
+  /**
+   * Returns the scene's min, max, and range extents in mm or voxel space.
+   * Includes both volume and mesh geometry.
+   * @internal
+   */
   sceneExtentsMinMax(isSliceMM = true) {
     let mn = vec3_exports.fromValues(0, 0, 0);
     let mx = vec3_exports.fromValues(0, 0, 0);
@@ -43450,7 +44716,10 @@ var Niivue = class {
     vec3_exports.subtract(range2, mx, mn);
     return [mn, mx, range2];
   }
-  // not included in public docs
+  /**
+   * Sets the 3D pivot point and scene scale based on volume and mesh extents.
+   * @internal
+   */
   setPivot3D() {
     const [mn, mx] = this.sceneExtentsMinMax();
     const pivot = vec3_exports.create();
@@ -43462,7 +44731,10 @@ var Niivue = class {
     this.extentsMax = mx;
     this.furthestFromPivot = vec3_exports.length(pivot) * 0.5;
   }
-  // not included in public docs
+  /**
+   * Returns the maximum number of 4D volumes across all loaded images.
+   * @internal
+   */
   getMaxVols() {
     if (this.volumes.length < 1) {
       return 0;
@@ -43473,7 +44745,10 @@ var Niivue = class {
     }
     return maxVols;
   }
-  // not included in public docs
+  /**
+   * Returns true if any loaded 4D volume is missing frames.
+   * @internal
+   */
   detectPartialllyLoaded4D() {
     if (this.volumes.length < 1) {
       return false;
@@ -43485,8 +44760,11 @@ var Niivue = class {
     }
     return false;
   }
-  // not included in public docs
-  // draw graph for 4D NVImage: time across horizontal, intensity is vertical
+  /**
+   * Draws a graph of 4D volume intensity over time at the current crosshair position.
+   * Skips if volume is 3D, region is too small, or graph opacity is zero.
+   * @internal
+   */
   drawGraph() {
     if (this.getMaxVols() < 2) {
       return;
@@ -43623,15 +44901,17 @@ var Niivue = class {
     function humanize(x) {
       return x.toFixed(6).replace(/\.?0*$/, "");
     }
-    const minWH = Math.min(graph.LTWH[2], graph.LTWH[3]);
-    const baseSize = 16;
-    const baseWH = 480;
-    const exponent = 0.5;
-    let fntSize = baseSize * Math.pow(minWH / baseWH, exponent);
-    if (fntSize < 12) {
+    let fntSize = this.fontPx * 0.7;
+    const screenWidthPts = this.gl.canvas.width / this.uiData.dpr;
+    const screenHeightPts = this.gl.canvas.height / this.uiData.dpr;
+    const screenAreaPts = screenWidthPts * screenHeightPts;
+    const refAreaPts = 800 * 600;
+    if (screenAreaPts < refAreaPts) {
       fntSize = 0;
+    } else {
+      fntSize = Math.max(fntSize, this.opts.fontMinPx);
     }
-    const fntScale = fntSize / (this.opts.textHeight * this.gl.canvas.height);
+    const fntScale = fntSize / this.fontPx;
     let maxTextWid = 0;
     let lineH = ticMin;
     if (fntSize > 0) {
@@ -43744,7 +45024,11 @@ var Niivue = class {
       );
     }
   }
-  // not included in public docs
+  /**
+   * Updates crosshair position using depth-based mouse picking from screen pixel color.
+   * Only active when depth picking is enabled.
+   * @internal
+   */
   depthPicker(leftTopWidthHeight, mvpMatrix) {
     if (!this.uiData.mouseDepthPicker) {
       return;
@@ -43787,8 +45071,10 @@ var Niivue = class {
     }
     this.scene.crosshairPos = this.mm2frac(mm, 0, true);
   }
-  // not included in public docs
-  // display 3D volume rendering of NVImage
+  /**
+   * Render a 3D volume visualization of the current NVImage using provided transformation matrices and angles.
+   * @internal
+   */
   drawImage3D(mvpMatrix, azimuth, elevation) {
     if (this.volumes.length === 0) {
       return;
@@ -43807,7 +45093,7 @@ var Niivue = class {
       }
       shader.use(this.gl);
       gl.uniform1i(shader.uniforms.backgroundMasksOverlays, this.backgroundMasksOverlays);
-      if (this.gradientTextureAmount > 0) {
+      if (this.gradientTextureAmount > 0 && shader.uniforms.normMtx && this.gradientTexture) {
         gl.activeTexture(TEXTURE6_GRADIENT);
         gl.bindTexture(gl.TEXTURE_3D, this.gradientTexture);
         const modelMatrix = this.calculateModelMatrix(azimuth, elevation);
@@ -43841,8 +45127,10 @@ var Niivue = class {
       gl.bindVertexArray(this.unusedVAO);
     }
   }
-  // not included in public docs
-  // draw cube that shows L/R, A/P, I/S directions
+  /**
+   * Draw a small orientation cube indicating L/R, A/P, I/S directions in the given tile area with specified azimuth and elevation.
+   * @internal
+   */
   drawOrientationCube(leftTopWidthHeight, azimuth = 0, elevation = 0) {
     if (!this.opts.isOrientCube) {
       return;
@@ -43878,8 +45166,12 @@ var Niivue = class {
     gl.bindVertexArray(this.unusedVAO);
     this.gl.disable(this.gl.CULL_FACE);
   }
-  // not included in public docs
-  // fills data returned with the onLocationChanvge() callback
+  /**
+   * Internal utility to generate human-readable location strings for the onLocationChange callback
+   * @param axCorSag - optional axis index for coordinate interpretation (NaN by default)
+   * @remarks Computes string representation of current crosshair position in mm (and frame if 4D).
+   * @see {@link https://niivue.com/demos/features/modulateAfni.html | live demo usage}
+   */
   createOnLocationChange(axCorSag = NaN) {
     const [_mn, _mx, range2] = this.sceneExtentsMinMax(true);
     const fov = Math.max(Math.max(range2[0], range2[1]), range2[2]);
@@ -43959,7 +45251,7 @@ var Niivue = class {
    * @param anchor - optional label anchor position (e.g., top-left, center, etc.)
    * @param onClick - optional callback function to invoke when the label is clicked
    * @returns the created `NVLabel3D` instance
-   * @see {@link https://niivue.github.io/niivue/features/labels.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/labels.html | live demo usage}
    */
   addLabel(text, style, points, anchor, onClick) {
     const defaultStyle = {
@@ -43977,7 +45269,10 @@ var Niivue = class {
     this.document.labels.push(label);
     return label;
   }
-  // not included in public docs
+  /**
+   * Calculate the 2D screen coordinates of a 3D point using the provided MVP matrix and tile position/size.
+   * @internal
+   */
   calculateScreenPoint(point, mvpMatrix, leftTopWidthHeight) {
     const screenPoint = vec4_exports.create();
     vec4_exports.transformMat4(screenPoint, [...point, 1], mvpMatrix);
@@ -43990,15 +45285,19 @@ var Niivue = class {
     }
     return screenPoint;
   }
+  /**
+   * Return the label located at the given screen coordinates, or null if none found.
+   * @internal
+   */
   getLabelAtPoint(screenPoint) {
-    const scale6 = 1;
-    const size = this.opts.textHeight * Math.min(this.gl.canvas.height, this.gl.canvas.width) * scale6;
-    const verticalMargin = this.opts.textHeight * this.gl.canvas.height * scale6;
+    const scale6 = this.legendFontScaling;
+    const size = this.fontPx * scale6;
+    const verticalMargin = this.fontPx * scale6;
     for (const label of this.document.labels) {
       if (label.anchor == null || label.anchor === 0 /* NONE */) {
         continue;
       }
-      const labelSize = this.opts.textHeight * this.gl.canvas.height * label.style.textScale;
+      const labelSize = this.fontPx * label.style.textScale * scale6;
       const textHeight = this.textHeight(labelSize, label.text);
       const textWidth = this.textWidth(labelSize, label.text);
       if (label.anchor & 1 /* LEFT */) {
@@ -44046,7 +45345,7 @@ var Niivue = class {
       return label;
     }
     log.debug("screenPoint", screenPoint);
-    const panelHeight = this.getLegendPanelHeight();
+    const panelHeight = this.getLegendPanelHeight(scale6);
     const panelWidth = this.getLegendPanelWidth();
     const left = this.gl.canvas.width - panelWidth;
     let top = (this.canvas.height - panelHeight) / 2;
@@ -44056,9 +45355,10 @@ var Niivue = class {
     }
     const labels = this.getConnectomeLabels();
     for (const label of labels) {
-      const labelSize = this.opts.textHeight * this.gl.canvas.height * label.style.textScale;
+      const labelSize = this.fontPx * label.style.textScale * scale6;
       const textHeight = this.textHeight(labelSize, label.text);
       if (screenPoint[1] >= top && screenPoint[1] <= top + textHeight + size / 2) {
+        log.debug(`label clicked ${label.text}`);
         return label;
       }
       top += textHeight;
@@ -44066,6 +45366,10 @@ var Niivue = class {
     }
     return null;
   }
+  /**
+   * Draw lines from a 2D label position to its associated 3D points; supports solid and dotted lines.
+   * @internal
+   */
   drawLabelLine(label, pos, mvpMatrix, leftTopWidthHeight, secondPass = false) {
     const points = Array.isArray(label.points) && Array.isArray(label.points[0]) ? label.points : [label.points];
     for (const point of points) {
@@ -44082,12 +45386,15 @@ var Niivue = class {
       }
     }
   }
-  // not included in public docs
-  draw3DLabel(label, pos, mvpMatrix, leftTopWidthHeight, bulletMargin, legendWidth, secondPass) {
+  /**
+   * Render a 3D label with optional leader lines, bullet markers, and text alignment within a legend.
+   * @internal
+   */
+  draw3DLabel(label, pos, mvpMatrix, leftTopWidthHeight, bulletMargin, legendWidth, secondPass, scaling = 1) {
     const text = label.text;
     const left = pos[0];
     const top = pos[1];
-    const size = this.opts.textHeight * Math.min(this.gl.canvas.height, this.gl.canvas.width) * 1;
+    const size = this.fontPx * scaling;
     const textHeight = this.textHeight(label.style.textScale, text) * size;
     if (label.style.lineWidth > 0 && Array.isArray(label.points)) {
       this.drawLabelLine(label, [left, top + textHeight], mvpMatrix, leftTopWidthHeight, secondPass);
@@ -44116,23 +45423,30 @@ var Niivue = class {
     const scale6 = label.style.textScale;
     this.drawText([textLeft, top], text, scale6, label.style.textColor);
   }
-  // not included in public docs
+  /**
+   * Render all visible 3D labels in the legend panel, handling font scaling and layering.
+   * @internal
+   */
   draw3DLabels(mvpMatrix, leftTopWidthHeight, secondPass = false) {
     const labels = this.getConnectomeLabels();
     if (!this.opts.showLegend || labels.length === 0) {
       return;
     }
-    if (!this.canvas) {
-      throw new Error("canvas undefined");
+    let panelHeight = this.getLegendPanelHeight(1);
+    if (!this.canvas || panelHeight < 1) {
+      return;
     }
     const gl = this.gl;
     gl.disable(gl.CULL_FACE);
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
-    const panelHeight = this.getLegendPanelHeight();
+    this.legendFontScaling = 1;
     if (panelHeight > this.canvas.height) {
-      log.debug("Legend may overflow screen size");
+      const margin = 10 * this.uiData.dpr;
+      this.legendFontScaling = Math.max(this.canvas.height - margin, 1) / panelHeight;
+      log.debug(`Legend too large for screen, font reduction factor x${this.legendFontScaling}`);
+      panelHeight = this.getLegendPanelHeight(this.legendFontScaling);
     }
-    const size = this.opts.textHeight * Math.min(this.gl.canvas.height, this.gl.canvas.width);
+    const size = this.fontPx * this.legendFontScaling;
     const bulletMargin = this.getBulletMarginWidth();
     const panelWidth = this.getLegendPanelWidth();
     const left = gl.canvas.width - panelWidth;
@@ -44145,9 +45459,18 @@ var Niivue = class {
       gl.depthFunc(gl.GREATER);
     }
     for (const label of labels) {
-      this.draw3DLabel(label, [left, top], mvpMatrix, leftTopWidthHeight, bulletMargin, panelWidth, secondPass);
-      const labelSize = this.opts.textHeight * this.gl.canvas.height * label.style.textScale;
-      const textHeight = this.textHeight(labelSize, label.text);
+      this.draw3DLabel(
+        label,
+        [left, top],
+        mvpMatrix,
+        leftTopWidthHeight,
+        bulletMargin,
+        panelWidth,
+        secondPass,
+        this.legendFontScaling
+      );
+      const labelSize = this.fontPx * label.style.textScale;
+      const textHeight = this.textHeight(labelSize, label.text) * this.legendFontScaling;
       top += textHeight;
       top += size / 2;
     }
@@ -44158,8 +45481,12 @@ var Niivue = class {
       }
     }
   }
+  /**
+   * Draw all labels anchored to screen edges or corners with background rectangles.
+   * @internal
+   */
   drawAnchoredLabels() {
-    const size = this.opts.textHeight * Math.min(this.gl.canvas.height, this.gl.canvas.width) * 1;
+    const size = this.fontPx;
     const anchoredLabels = this.document.labels.filter((l) => l.anchor != null && l.anchor !== 0 /* NONE */);
     for (const label of anchoredLabels) {
       const text = label.text;
@@ -44168,7 +45495,7 @@ var Niivue = class {
       let left;
       let top;
       const scale6 = 1;
-      const verticalMargin = this.opts.textHeight * this.gl.canvas.height * scale6;
+      const verticalMargin = this.fontPx * scale6;
       const rectHeightDiff = verticalMargin;
       let rectWidthDiff = verticalMargin / 4;
       let rectHorizontalOffset = 0;
@@ -44203,7 +45530,10 @@ var Niivue = class {
       this.draw3DLabel(label, [left, top]);
     }
   }
-  // not included in public docs
+  /**
+   * Render the 3D scene including volume, meshes, labels, crosshairs, and orientation cube.
+   * @internal
+   */
   draw3D(leftTopWidthHeight = [0, 0, 0, 0], mvpMatrix = null, modelMatrix = null, normalMatrix = null, azimuth = null, elevation = 0) {
     const isMosaic = azimuth !== null;
     this.setPivot3D();
@@ -44278,8 +45608,10 @@ var Niivue = class {
     this.draw3DLabels(mvpMatrix, relativeLTWH, true);
     return posString;
   }
-  // not included in public docs
-  // create 3D rendering of NVMesh on canvas
+  /**
+   * Render all visible 3D meshes with proper blending, depth, and shader settings.
+   * @internal
+   */
   drawMesh3D(isDepthTest = true, alpha = 1, m, modelMtx, normMtx) {
     if (this.meshes.length < 1) {
       return;
@@ -44380,7 +45712,10 @@ var Niivue = class {
     gl.depthFunc(gl.ALWAYS);
     this.readyForSync = true;
   }
-  // not included in public docs
+  /**
+   * Render 3D crosshairs at the current crosshair position with optional depth testing and transparency.
+   * @internal
+   */
   drawCrosshairs3D(isDepthTest = true, alpha = 1, mvpMtx = null, is2DView = false, isSliceMM = true) {
     if (!this.opts.show3Dcrosshair && !is2DView) {
       return;
@@ -44454,7 +45789,10 @@ var Niivue = class {
     );
     gl.bindVertexArray(this.unusedVAO);
   }
-  // not included in public docs
+  /**
+   * Convert millimeter coordinates to fractional volume coordinates for the specified volume.
+   * @internal
+   */
   mm2frac(mm, volIdx = 0, isForceSliceMM = false) {
     if (this.volumes.length < 1) {
       const frac = vec3_exports.fromValues(0.1, 0.5, 0.5);
@@ -44480,11 +45818,17 @@ var Niivue = class {
     }
     return this.volumes[volIdx].convertMM2Frac(mm, isForceSliceMM || this.opts.isSliceMM);
   }
-  // not included in public docs
+  /**
+   * Convert voxel coordinates to fractional volume coordinates for the specified volume.
+   * @internal
+   */
   vox2frac(vox, volIdx = 0) {
     return this.volumes[volIdx].convertVox2Frac(vox);
   }
-  // not included in public docs
+  /**
+   * Convert fractional volume coordinates to voxel coordinates for the specified volume.
+   * @internal
+   */
   frac2vox(frac, volIdx = 0) {
     if (this.volumes.length <= volIdx) {
       return [0, 0, 0];
@@ -44497,7 +45841,7 @@ var Niivue = class {
    * @param y - translate posterior (-) or +anterior (+)
    * @param z - translate inferior (-) or superior (+)
    * @example niivue.moveCrosshairInVox(1, 0, 0)
-   * @see {@link https://niivue.github.io/niivue/features/draw2.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/draw2.html | live demo usage}
    */
   moveCrosshairInVox(x, y, z) {
     const vox = this.frac2vox(this.scene.crosshairPos);
@@ -44516,7 +45860,10 @@ var Niivue = class {
     }
     this.drawScene();
   }
-  // not included in public docs
+  /**
+   * Convert fractional volume coordinates to millimeter space for the specified volume.
+   * @internal
+   */
   frac2mm(frac, volIdx = 0, isForceSliceMM = false) {
     const pos = vec4_exports.fromValues(frac[0], frac[1], frac[2], 1);
     if (this.volumes.length > 0) {
@@ -44530,7 +45877,10 @@ var Niivue = class {
     }
     return pos;
   }
-  // not included in public docs
+  /**
+   * Convert screen pixel coordinates to texture fractional coordinates for the given slice index.
+   * @internal
+   */
   screenXY2TextureFrac(x, y, i, restrict0to1 = true) {
     const texFrac = vec3_exports.fromValues(-1, -1, -1);
     const axCorSag = this.screenSlices[i].axCorSag;
@@ -44574,7 +45924,10 @@ var Niivue = class {
     }
     return xyz;
   }
-  // not included in public docs
+  /**
+   * Converts a canvas position to fractional texture coordinates.
+   * @internal
+   */
   canvasPos2frac(canvasPos) {
     for (let i = 0; i < this.screenSlices.length; i++) {
       const texFrac = this.screenXY2TextureFrac(canvasPos[0], canvasPos[1], i);
@@ -44584,8 +45937,11 @@ var Niivue = class {
     }
     return [-1, -1, -1];
   }
-  // not included in public docs
-  // note: we also have a "sliceScale" method, which could be confusing
+  /**
+   * Calculates scaled slice dimensions and position within the canvas.
+   * n.b. beware of similarly named `sliceScale` method.
+   * @internal
+   */
   scaleSlice(w, h, padPixelsWH = [0, 0], canvasWH = [0, 0]) {
     const canvasW = canvasWH[0] === 0 ? this.effectiveCanvasWidth() - padPixelsWH[0] : canvasWH[0] - padPixelsWH[0];
     const canvasH = canvasWH[1] === 0 ? this.effectiveCanvasHeight() - padPixelsWH[1] : canvasWH[1] - padPixelsWH[1];
@@ -44598,8 +45954,10 @@ var Niivue = class {
     const leftTopWidthHeight = [(canvasW - wPix) * 0.5, (canvasH - hPix) * 0.5, wPix, hPix, scalePix];
     return leftTopWidthHeight;
   }
-  // not included in public docs
-  // display 2D image to defer loading of (slow) 3D data
+  /**
+   * Renders a centered thumbnail image using the bitmap shader.
+   * @internal
+   */
   drawThumbnail() {
     if (!this.bmpShader) {
       throw new Error("bmpShader undefined");
@@ -44619,9 +45977,11 @@ var Niivue = class {
     this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
     this.gl.bindVertexArray(this.unusedVAO);
   }
-  // not included in public docs
-  // draw line (can be diagonal)
-  // unless Alpha is > 0, default color is opts.crosshairColor
+  /**
+   * Draws a 2D line with specified thickness and color on the canvas.
+   * If alpha < 0, uses the default crosshair color.
+   * @internal
+   */
   drawLine(startXYendXY, thickness = 1, lineColor = [1, 0, 0, -1]) {
     this.gl.bindVertexArray(this.genericVAO);
     if (!this.lineShader) {
@@ -44638,9 +45998,11 @@ var Niivue = class {
     this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
     this.gl.bindVertexArray(this.unusedVAO);
   }
-  // not included in public docs
-  // draw line (can be diagonal)
-  // unless Alpha is > 0, default color is opts.crosshairColor
+  /**
+   * Draws a 3D line from screen to world space with specified thickness and color.
+   * If alpha < 0, uses the default crosshair color.
+   * @internal
+   */
   draw3DLine(startXY, endXYZ, thickness = 1, lineColor = [1, 0, 0, -1]) {
     this.gl.bindVertexArray(this.genericVAO);
     if (!this.line3DShader) {
@@ -44658,6 +46020,11 @@ var Niivue = class {
     this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
     this.gl.bindVertexArray(this.unusedVAO);
   }
+  /**
+   * Draws a dotted 2D line with specified thickness and color.
+   * If alpha < 0, uses the default crosshair color with reduced opacity.
+   * @internal
+   */
   drawDottedLine(startXYendXY, thickness = 1, lineColor = [1, 0, 0, -1]) {
     this.gl.bindVertexArray(this.genericVAO);
     if (!this.lineShader) {
@@ -44670,7 +46037,7 @@ var Niivue = class {
     const totalLength = vec2_exports.length(segment);
     vec2_exports.normalize(segment, segment);
     const scale6 = 1;
-    const size = this.opts.textHeight * Math.min(this.gl.canvas.height, this.gl.canvas.width) * scale6;
+    const size = this.fontPx * scale6;
     vec2_exports.scale(segment, segment, size / 2);
     const segmentLength = vec2_exports.length(segment);
     let segmentCount = Math.floor(totalLength / segmentLength);
@@ -44700,11 +46067,17 @@ var Niivue = class {
     }
     this.gl.bindVertexArray(this.unusedVAO);
   }
-  // not included in public docs
+  /**
+   * Draw a colored line on the graph using given coordinates, color, and thickness.
+   * @internal
+   */
   drawGraphLine(LTRB, color = [1, 0, 0, 0.5], thickness = 2) {
     this.drawLine(LTRB, thickness, color);
   }
-  // not included in public docs
+  /**
+   * Draw crosshair lines in millimeters on a given 2D slice tile.
+   * @internal
+   */
   drawCrossLinesMM(sliceIndex, axCorSag, axiMM, corMM, sagMM) {
     if (sliceIndex < 0 || this.screenSlices.length <= sliceIndex) {
       return;
@@ -44837,7 +46210,10 @@ var Niivue = class {
       }
     }
   }
-  // not included in public docs
+  /**
+   * Draw crosshair lines on 2D slice tile, delegating to mm-based drawing if appropriate.
+   * @internal
+   */
   drawCrossLines(sliceIndex, axCorSag, axiMM, corMM, sagMM) {
     if (sliceIndex < 0 || this.screenSlices.length <= sliceIndex) {
       return;
@@ -44894,7 +46270,7 @@ var Niivue = class {
    * display a lightbox or montage view
    * @param mosaicStr - specifies orientation (A,C,S) and location of slices.
    * @example niivue.setSliceMosaicString("A -10 0 20");
-   * @see {@link https://niivue.github.io/niivue/features/mosaics.html | live demo usage}
+   * @see {@link https://niivue.com/demos/features/mosaics.html | live demo usage}
    */
   drawMosaic(mosaicStr) {
     this.screenSlices = [];
@@ -44906,7 +46282,7 @@ var Niivue = class {
     const sagMM = [];
     const items = mosaicStr.split(/\s+/);
     let scale6 = 1;
-    const labelSize = this.opts.textHeight;
+    const labelSize = this.fontPx;
     let marginLeft = 0;
     let marginTop = 0;
     let tileGap = 0;
@@ -44967,12 +46343,14 @@ var Niivue = class {
           mxRowWid = Math.max(mxRowWid, left + prevW);
           rowHt = 0;
           left = 0;
+          prevW = 0;
+          continue;
         }
         w = prevW;
         if (horizontalOverlap > 0 && !isRender) {
           w = Math.round(w * (1 - horizontalOverlap));
         }
-        log.debug(`slice ${i} width with overlap ${w} pixels`);
+        log.debug(`item ${i} width with overlap ${w} pixels`);
         left += w;
         w = 0;
         const sliceMM = parseFloat(item);
@@ -45008,7 +46386,7 @@ var Niivue = class {
           }
         } else {
           const ltwh = [marginLeft + scale6 * left, marginTop + scale6 * top, scale6 * w, scale6 * h];
-          this.opts.textHeight = isLabel ? labelSize : 0;
+          this.fontPx = isLabel ? labelSize : 0;
           if (isRender) {
             let inf = sliceMM < 0 ? -Infinity : Infinity;
             if (Object.is(sliceMM, -0)) {
@@ -45044,8 +46422,12 @@ var Niivue = class {
         marginTop = this.opts.tileMargin;
       }
     }
-    this.opts.textHeight = labelSize;
+    this.fontPx = labelSize;
   }
+  /**
+   * Calculate width and height to fit a slice within a container, preserving aspect ratio based on slice type and volume scaling.
+   * @internal
+   */
   calculateWidthHeight(sliceType, volScale, containerWidth, containerHeight) {
     let xScale, yScale;
     switch (sliceType) {
@@ -45076,7 +46458,10 @@ var Niivue = class {
     }
     return [actualWidth, actualHeight];
   }
-  // not included in public docs
+  /**
+   * Core function to draw the entire scene including volumes, meshes, slices, overlays, colorbars, graphs, and handle user interaction like dragging.
+   * @internal
+   */
   drawSceneCore() {
     if (!this.initialized) {
       return;
@@ -45217,10 +46602,10 @@ var Niivue = class {
         if (typeof this.opts.multiplanarPadPixels !== "number") {
           log.debug("multiplanarPadPixels must be numeric");
         }
-        const pad = parseFloat(`${this.opts.multiplanarPadPixels}`);
-        let innerPad = this.opts.tileMargin;
+        const pad = parseFloat(`${this.opts.multiplanarPadPixels}`) * this.uiData.dpr;
+        let innerPad = this.opts.tileMargin * this.uiData.dpr;
         if (innerPad < 0) {
-          innerPad = 2 * (2 + Math.ceil(Math.max(this.opts.textHeight, 0.01) * Math.min(this.gl.canvas.height, this.gl.canvas.width)));
+          innerPad = 2 * (2 + Math.ceil(this.fontPx));
         }
         let canvasWH = [this.effectiveCanvasWidth(), this.effectiveCanvasHeight()];
         if (this.opts.heroImageFraction > 0 && this.opts.heroImageFraction < 1) {
@@ -45396,6 +46781,10 @@ var Niivue = class {
         ]);
         return;
       }
+      if (this.opts.dragMode === 7 /* angle */) {
+        this.drawAngleMeasurementTool();
+        return;
+      }
       const width = Math.abs(this.uiData.dragStart[0] - this.uiData.dragEnd[0]);
       const height = Math.abs(this.uiData.dragStart[1] - this.uiData.dragEnd[1]);
       this.drawSelectionBox([
@@ -45413,8 +46802,10 @@ var Niivue = class {
     this.drawAnchoredLabels();
     return posString;
   }
-  // not included in public docs
-  // called to refresh canvas
+  /**
+   * Manage draw calls to prevent concurrency issues, calling drawSceneCore and handling refresh flags.
+   * @internal
+   */
   drawScene() {
     if (this.isBusy) {
       this.needsRefresh = true;
@@ -45431,12 +46822,20 @@ var Niivue = class {
     }
     return posString;
   }
+  /**
+   * Getter for WebGL2 rendering context; throws error if context is unavailable.
+   * @internal
+   */
   get gl() {
     if (!this._gl) {
       throw new Error("unable to get WebGL context. Maybe the browser doesn't support WebGL2.");
     }
     return this._gl;
   }
+  /**
+   * Setter for WebGL2 rendering context.
+   * @internal
+   */
   set gl(gl) {
     this._gl = gl;
   }
