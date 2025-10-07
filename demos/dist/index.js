@@ -5249,16 +5249,25 @@ var forEach3 = function() {
 // package.json
 var package_default = {
   name: "@niivue/niivue",
-  version: "0.61.0",
+  version: "0.62.1",
   description: "minimal webgl2 nifti image viewer",
-  types: "./build/index.d.ts",
-  main: "./build/index.js",
+  types: "./build/niivue/index.d.ts",
+  main: "./build/niivue/index.js",
   type: "module",
   unpkg: "./dist/index.min.js",
-  module: "./build/index.js",
+  module: "./build/niivue/index.js",
   exports: {
     ".": {
-      import: "./build/index.js"
+      import: "./build/niivue/index.js",
+      types: "./build/niivue/index.d.ts"
+    },
+    "./drawing": {
+      import: "./build/drawing/index.js",
+      types: "./build/drawing/index.d.ts"
+    },
+    "./utils": {
+      import: "./build/utils/index.js",
+      types: "./build/utils/index.d.ts"
     },
     "./min": {
       import: "./build/index.min.js"
@@ -5351,2194 +5360,6 @@ var package_default = {
     "@rollup/rollup-linux-x64-gnu": "^4.18.1"
   }
 };
-
-// src/logger.ts
-var _Log = class _Log {
-  constructor({ name = "niivue", level = "info" } = {}) {
-    __publicField(this, "level");
-    __publicField(this, "name");
-    this.name = `${name}`;
-    this.level = level;
-  }
-  debug(...args) {
-    if (_Log.levels[this.level] > _Log.levels.debug) {
-      return;
-    }
-    console.debug(`${this.name}-debug`, ...args);
-  }
-  info(...args) {
-    if (_Log.levels[this.level] > _Log.levels.info) {
-      return;
-    }
-    console.info(`${this.name}-info`, ...args);
-  }
-  warn(...args) {
-    if (_Log.levels[this.level] > _Log.levels.warn) {
-      return;
-    }
-    console.warn(`${this.name}-warn`, ...args);
-  }
-  error(...args) {
-    if (_Log.levels[this.level] > _Log.levels.error) {
-      return;
-    }
-    console.error(`${this.name}-error`, ...args);
-  }
-  fatal(...args) {
-    if (_Log.levels[this.level] > _Log.levels.fatal) {
-      return;
-    }
-    console.error(`${this.name}-fatal`, ...args);
-  }
-  setLogLevel(level) {
-    this.level = level;
-  }
-  setName(name) {
-    this.name = name;
-  }
-};
-// map 'debug' 'info' 'warn' 'error' 'fatal' 'silent' to numbers
-// for comparison
-__publicField(_Log, "levels", {
-  debug: 0,
-  info: 1,
-  warn: 2,
-  error: 3,
-  fatal: 4,
-  silent: Infinity
-});
-var Log = _Log;
-var log = new Log({ name: "niivue", level: "info" });
-
-// src/shader.ts
-var compileShader = function(gl, vert, frag) {
-  const vs = gl.createShader(gl.VERTEX_SHADER);
-  gl.shaderSource(vs, vert);
-  gl.compileShader(vs);
-  const fs = gl.createShader(gl.FRAGMENT_SHADER);
-  gl.shaderSource(fs, frag);
-  gl.compileShader(fs);
-  const program = gl.createProgram();
-  gl.attachShader(program, vs);
-  gl.attachShader(program, fs);
-  gl.linkProgram(program);
-  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-    console.log(gl.getProgramInfoLog(program));
-    if (!gl.getShaderParameter(vs, gl.COMPILE_STATUS)) {
-      console.log("Vertex shader compilation error:", gl.getShaderInfoLog(vs));
-    }
-    if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
-      console.log("Fragment shader compilation error:", gl.getShaderInfoLog(fs));
-    }
-    log.error(gl.getProgramInfoLog(program));
-    throw new Error("Shader failed to link, see console for log");
-  }
-  return program;
-};
-var Shader = class {
-  constructor(gl, vertexSrc, fragmentSrc) {
-    __publicField(this, "program");
-    __publicField(this, "uniforms", {});
-    __publicField(this, "isMatcap");
-    this.program = compileShader(gl, vertexSrc, fragmentSrc);
-    const regexUniform = /uniform[^;]+[ ](\w+);/g;
-    const matchUniformName = /uniform[^;]+[ ](\w+);/;
-    const vertexUnifs = vertexSrc.match(regexUniform);
-    const fragUnifs = fragmentSrc.match(regexUniform);
-    if (vertexUnifs) {
-      vertexUnifs.forEach((unif) => {
-        const m = unif.match(matchUniformName);
-        this.uniforms[m[1]] = -1;
-      });
-    }
-    if (fragUnifs) {
-      fragUnifs.forEach((unif) => {
-        const m = unif.match(matchUniformName);
-        this.uniforms[m[1]] = -1;
-      });
-    }
-    for (const unif in this.uniforms) {
-      this.uniforms[unif] = gl.getUniformLocation(this.program, unif);
-    }
-  }
-  use(gl) {
-    gl.useProgram(this.program);
-  }
-};
-
-// src/shader-srcs.ts
-var vertRenderShader = `#version 300 es
-#line 4
-layout(location=0) in vec3 pos;
-layout(location=1) in vec3 texCoords;
-uniform mat4 mvpMtx;
-out vec3 vColor;
-void main(void) {
-	gl_Position = mvpMtx * vec4(pos, 1.0);
-	vColor = texCoords;
-}`;
-var kDrawFunc = `
-	vec4 drawColor(float scalar, float drawOpacity) {
-		float nlayer = float(textureSize(colormap, 0).y);
-		float layer = (nlayer - 0.5) / nlayer;
-		vec4 dcolor = texture(colormap, vec2((scalar * 255.0)/256.0 + 0.5/256.0, layer)).rgba;
-		dcolor.a *= drawOpacity;
-		return dcolor;
-}`;
-var kRenderFunc = `vec3 GetBackPosition(vec3 startPositionTex) {
-	vec3 startPosition = startPositionTex * volScale;
-	vec3 invR = 1.0 / rayDir;
-	vec3 tbot = invR * (vec3(0.0)-startPosition);
-	vec3 ttop = invR * (volScale-startPosition);
-	vec3 tmax = max(ttop, tbot);
-	vec2 t = min(tmax.xx, tmax.yz);
-	vec3 endPosition = startPosition + (rayDir * min(t.x, t.y));
-	//convert world position back to texture position:
-	endPosition = endPosition / volScale;
-	return endPosition;
-}
-
-vec4 applyClip (vec3 dir, inout vec4 samplePos, inout float len, inout bool isClip) {
-	float cdot = dot(dir,clipPlane.xyz);
-	isClip = false;
-	if  ((clipPlane.a > 1.0) || (cdot == 0.0)) return samplePos;
-	bool frontface = (cdot > 0.0);
-	float dis = (-clipPlane.a - dot(clipPlane.xyz, samplePos.xyz-0.5)) / cdot;
-	float thick = clipThick;
-	if (thick <= 0.0) thick = 2.0;
-	float  disBackFace = (-(clipPlane.a-thick) - dot(clipPlane.xyz, samplePos.xyz-0.5)) / cdot;
-	if (((frontface) && (dis >= len)) || ((!frontface) && (dis <= 0.0))) {
-		samplePos.a = len + 1.0;
-		return samplePos;
-	}
-	if (frontface) {
-		dis = max(0.0, dis);
-		samplePos = vec4(samplePos.xyz+dir * dis, dis);
-		if (dis > 0.0) isClip = true;
-		len = min(disBackFace, len);
-	}
-	if (!frontface) {
-		len = min(dis, len);
-		disBackFace = max(0.0, disBackFace);
-		if (len == dis) isClip = true;
-		samplePos = vec4(samplePos.xyz+dir * disBackFace, disBackFace);
-	}
-	return samplePos;
-}
-
-void clipVolume(inout vec3 startPos, inout vec3 backPos, int dim, float frac, bool isLo) {
-	vec3 dir = backPos - startPos;
-	float len = length(dir);
-	dir = normalize(dir);
-	// Discard if both startPos and backPos are outside the clipping plane
-	if (isLo && startPos[dim] < frac && backPos[dim] < frac) {
-		discard;
-	}
-	if (!isLo && startPos[dim] > frac && backPos[dim] > frac) {
-		discard;
-	}
-	vec4 plane = vec4(0.0, 0.0, 0.0, 0.5 - frac);
-	plane[dim] = 1.0;
-	float cdot = dot(dir, plane.xyz);
-	float dis = (-plane.w - dot(plane.xyz, startPos - vec3(0.5))) / cdot;
-	// Adjust startPos or backPos based on the intersection with the plane
-	bool isFrontFace = (cdot > 0.0);
-	if (!isLo)
-		isFrontFace = !isFrontFace;
-	if (dis > 0.0) {
-		if (isFrontFace) {
-				if (dis <= len) {
-					startPos = startPos + dir * dis;
-				}
-		} else {
-			if (dis < len) {
-				backPos = startPos + dir * dis;
-			}
-		}
-	}
-}
-
-void clipVolumeStart (inout vec3 startPos, inout vec3 backPos) {
-	// vec3 clipLo = vec3(0.1, 0.2, 0.4);
-	// vec3 clipHi = vec3(0.8, 0.7, 0.7);
-	for (int i = 0; i < 3; i++) {
-		if (clipLo[i] > 0.0)
-			clipVolume(startPos, backPos, i, clipLo[i], true);
-	}
-	for (int i = 0; i < 3; i++) {
-		if (clipHi[i] < 1.0)
-			clipVolume(startPos, backPos, i, clipHi[i], false);
-	}
-}
-
-float frac2ndc(vec3 frac) {
-//https://stackoverflow.com/questions/7777913/how-to-render-depth-linearly-in-modern-opengl-with-gl-fragcoord-z-in-fragment-sh
-	vec4 pos = vec4(frac.xyz, 1.0); //fraction
-	vec4 dim = vec4(vec3(textureSize(volume, 0)), 1.0);
-	pos = pos * dim;
-	vec4 shim = vec4(-0.5, -0.5, -0.5, 0.0);
-	pos += shim;
-	vec4 mm = transpose(matRAS) * pos;
-	float z_ndc = (mvpMtx * vec4(mm.xyz, 1.0)).z;
-	return (z_ndc + 1.0) / 2.0;
-}` + kDrawFunc;
-var kRenderInit = `void main() {
-	if (fColor.x > 2.0) {
-		fColor = vec4(1.0, 0.0, 0.0, 0.5);
-		return;
-	}
-	fColor = vec4(0.0,0.0,0.0,0.0);
-	vec4 clipPlaneColorX = clipPlaneColor;
-	//if (clipPlaneColor.a < 0.0)
-	//	clipPlaneColorX.a = - 1.0;
-	bool isColorPlaneInVolume = false;
-	if (clipPlaneColorX.a < 0.0) {
-		isColorPlaneInVolume = true;
-		clipPlaneColorX.a = 0.0;
-	}
-	//fColor = vec4(vColor.rgb, 1.0); return;
-	vec3 start = vColor;
-	gl_FragDepth = 0.0;
-	vec3 backPosition = GetBackPosition(start);
-	// fColor = vec4(backPosition, 1.0); return;
-	vec3 dir = normalize(backPosition - start);
-	clipVolumeStart(start, backPosition);
-	dir = normalize(dir);
-	float len = length(backPosition - start);
-	float lenVox = length((texVox * start) - (texVox * backPosition));
-	if ((lenVox < 0.5) || (len > 3.0)) { //length limit for parallel rays
-		return;
-	}
-	float sliceSize = len / lenVox; //e.g. if ray length is 1.0 and traverses 50 voxels, each voxel is 0.02 in unit cube
-	float stepSize = sliceSize; //quality: larger step is faster traversal, but fewer samples
-	float opacityCorrection = stepSize/sliceSize;
-	vec4 deltaDir = vec4(dir.xyz * stepSize, stepSize);
-	vec4 samplePos = vec4(start.xyz, 0.0); //ray position
-	float lenNoClip = len;
-	bool isClip = false;
-	vec4 clipPos = applyClip(dir, samplePos, len, isClip);
-	//if ((clipPos.a != samplePos.a) && (len < 3.0)) {
-	//start: OPTIONAL fast pass: rapid traversal until first hit
-	float stepSizeFast = sliceSize * 1.9;
-	vec4 deltaDirFast = vec4(dir.xyz * stepSizeFast, stepSizeFast);
-	while (samplePos.a <= len) {
-		float val = texture(volume, samplePos.xyz).a;
-		if (val > 0.01)
-			break;
-		samplePos += deltaDirFast; //advance ray position
-	}
-	float drawOpacityA = renderDrawAmbientOcclusionXY.y;
-	if ((samplePos.a >= len) && (((overlays < 1.0) && (drawOpacityA <= 0.0) ) || (backgroundMasksOverlays > 0)))  {
-		if (isClip)
-			fColor += clipPlaneColorX;
-		return;
-	}
-	fColor = vec4(1.0, 1.0, 1.0, 1.0);
-	//gl_FragDepth = frac2ndc(samplePos.xyz); //crude due to fast pass resolution
-	samplePos -= deltaDirFast;
-	if (samplePos.a < 0.0)
-		vec4 samplePos = vec4(start.xyz, 0.0); //ray position
-	//end: fast pass
-	vec4 colAcc = vec4(0.0,0.0,0.0,0.0);
-	vec4 firstHit = vec4(0.0,0.0,0.0,2.0 * lenNoClip);
-	const float earlyTermination = 0.95;
-	float backNearest = len; //assume no hit
-	float ran = fract(sin(gl_FragCoord.x * 12.9898 + gl_FragCoord.y * 78.233) * 43758.5453);
-	samplePos += deltaDir * ran; //jitter ray
-`;
-var kRenderTail = `
-	if (firstHit.a < len)
-		gl_FragDepth = frac2ndc(firstHit.xyz);
-	colAcc.a = (colAcc.a / earlyTermination) * backOpacity;
-	fColor = colAcc;
-	//if (isClip) //CR
-	if ((isColorPlaneInVolume) && (clipPos.a != samplePos.a) && (abs(firstHit.a - clipPos.a) < deltaDir.a))
-		fColor.rgb = mix(fColor.rgb, clipPlaneColorX.rgb, abs(clipPlaneColor.a));
-		//fColor.rgb = mix(fColor.rgb, clipPlaneColorX.rgb, clipPlaneColorX.a * 0.65);
-	float renderDrawAmbientOcclusionX = renderDrawAmbientOcclusionXY.x;
-	float drawOpacity = renderDrawAmbientOcclusionXY.y;
-	if ((overlays < 1.0) && (drawOpacity <= 0.0))
-		return;
-	//overlay pass
-	len = lenNoClip;
-	samplePos = vec4(start.xyz, 0.0); //ray position
-	//start: OPTIONAL fast pass: rapid traversal until first hit
-	stepSizeFast = sliceSize * 1.0;
-	deltaDirFast = vec4(dir.xyz * stepSizeFast, stepSizeFast);
-	while (samplePos.a <= len) {
-		float val = texture(overlay, samplePos.xyz).a;
-		if (drawOpacity > 0.0)
-			val = max(val, texture(drawing, samplePos.xyz).r);
-		if (val > 0.001)
-			break;
-		samplePos += deltaDirFast; //advance ray position
-	}
-	if (samplePos.a >= len) {
-		if (isClip && (fColor.a == 0.0))
-				fColor += clipPlaneColorX;
-			return;
-	}
-	samplePos -= deltaDirFast;
-	if (samplePos.a < 0.0)
-		vec4 samplePos = vec4(start.xyz, 0.0); //ray position
-	//end: fast pass
-	float overFarthest = len;
-	colAcc = vec4(0.0, 0.0, 0.0, 0.0);
-
-	samplePos += deltaDir * ran; //jitter ray
-	vec4 overFirstHit = vec4(0.0,0.0,0.0,2.0 * len);
-	if (backgroundMasksOverlays > 0)
-		samplePos = firstHit;
-	bool firstDraw = true;
-	while (samplePos.a <= len) {
-		vec4 colorSample = texture(overlay, samplePos.xyz);
-		if ((colorSample.a < 0.01) && (drawOpacity > 0.0)) {
-			float val = texture(drawing, samplePos.xyz).r;
-			vec4 draw = drawColor(val, drawOpacity);
-			if ((draw.a > 0.0) && (firstDraw)) {
-				firstDraw = false;
-				float sum = 0.0;
-				const float mn = 1.0 / 256.0;
-				const float sampleRadius = 1.1;
-				float dx = sliceSize * sampleRadius;
-				vec3 center = samplePos.xyz;
-				//six neighbors that share a face
-				sum += min(texture(drawing, center.xyz + cross(vec3(0.0,0.0,+dx), dir)).r, mn);
-				sum += min(texture(drawing, center.xyz + cross(vec3(0.0,0.0,-dx), dir)).r, mn);
-				sum += min(texture(drawing, center.xyz + cross(vec3(0.0,+dx,0.0), dir)).r, mn);
-				sum += min(texture(drawing, center.xyz + cross(vec3(0.0,-dx,0.0), dir)).r, mn);
-				sum += min(texture(drawing, center.xyz + cross(vec3(+dx,0.0,0.0), dir)).r, mn);
-				sum += min(texture(drawing, center.xyz + cross(vec3(-dx,0.0,0.0), dir)).r, mn);
-				//float proportion = (sum / mn) / 6.0;
-				
-				//12 neighbors that share an edge
-				dx = sliceSize * sampleRadius * sqrt(2.0) * 0.5;
-				sum += min(texture(drawing, center.xyz + cross(vec3(0.0,+dx,+dx), dir)).r, mn);
-				sum += min(texture(drawing, center.xyz + cross(vec3(+dx,0.0,+dx), dir)).r, mn);
-				sum += min(texture(drawing, center.xyz + cross(vec3(+dx,+dx,0.0), dir)).r, mn);
-				sum += min(texture(drawing, center.xyz + cross(vec3(0.0,-dx,-dx), dir)).r, mn);
-				sum += min(texture(drawing, center.xyz + cross(vec3(-dx,0.0,-dx), dir)).r, mn);
-				sum += min(texture(drawing, center.xyz + cross(vec3(-dx,-dx,0.0), dir)).r, mn);
-
-				sum += min(texture(drawing, center.xyz + cross(vec3(0.0,+dx,-dx), dir)).r, mn);
-				sum += min(texture(drawing, center.xyz + cross(vec3(+dx,0.0,-dx), dir)).r, mn);
-				sum += min(texture(drawing, center.xyz + cross(vec3(+dx,-dx,0.0), dir)).r, mn);
-				
-				sum += min(texture(drawing, center.xyz + cross(vec3(0.0,-dx,+dx), dir)).r, mn);
-				sum += min(texture(drawing, center.xyz + cross(vec3(-dx,0.0,+dx), dir)).r, mn);
-				sum += min(texture(drawing, center.xyz + cross(vec3(-dx,+dx,0.0), dir)).r, mn);
-				float proportion = (sum / mn) / 18.0; //proportion of six neighbors is non-zero
-				
-				//a high proportion of hits means crevice
-				//since the AO term adds shadows that darken most voxels, it will result in dark surfaces
-				//the term brighten adds a little illumination to balance this
-				// without brighten, only the most extreme ridges will not be darker
-				const float brighten = 1.2;
-				vec3 ao = draw.rgb * (1.0 - proportion) * brighten;
-				draw.rgb = mix (draw.rgb, ao , renderDrawAmbientOcclusionX);
-			}
-			colorSample = draw;
-		}
-		samplePos += deltaDir; //advance ray position
-		if (colorSample.a >= 0.01) {
-			if (overFirstHit.a > len)
-				overFirstHit = samplePos;
-			colorSample.a *= renderOverlayBlend;
-			colorSample.a = 1.0-pow((1.0 - colorSample.a), opacityCorrection);
-			colorSample.rgb *= colorSample.a;
-			colAcc= (1.0 - colAcc.a) * colorSample + colAcc;
-			overFarthest = samplePos.a;
-			if ( colAcc.a > earlyTermination )
-				break;
-		}
-	}
-	//if (samplePos.a >= len) {
-	if (colAcc.a <= 0.0) {
-		if (isClip && (fColor.a == 0.0))
-			fColor += clipPlaneColorX;
-		return;
-	}
-	if (overFirstHit.a < firstHit.a)
-		gl_FragDepth = frac2ndc(overFirstHit.xyz);
-	float overMix = colAcc.a;
-	float overlayDepth = 0.3;
-	if (fColor.a <= 0.0)
-		overMix = 1.0;
-	else if (((overFarthest) > backNearest)) {
-		float dx = (overFarthest - backNearest)/1.73;
-		dx = fColor.a * pow(dx, overlayDepth);
-		overMix *= 1.0 - dx;
-	}
-	fColor.rgb = mix(fColor.rgb, colAcc.rgb, overMix);
-	fColor.a = max(fColor.a, colAcc.a);
-}`;
-var fragRenderSliceShader = `#version 300 es
-#line 215
-precision highp int;
-precision highp float;
-uniform vec3 rayDir;
-uniform vec3 texVox;
-uniform int backgroundMasksOverlays;
-uniform vec3 volScale;
-uniform vec4 clipPlane;
-uniform highp sampler3D volume, overlay;
-uniform float overlays;
-uniform float clipThick;
-uniform vec3 clipLo;
-uniform vec3 clipHi;
-uniform float backOpacity;
-uniform mat4 mvpMtx;
-uniform mat4 matRAS;
-uniform vec4 clipPlaneColor;
-uniform float renderOverlayBlend;
-uniform highp sampler3D drawing;
-uniform highp sampler2D colormap;
-uniform vec2 renderDrawAmbientOcclusionXY;
-in vec3 vColor;
-out vec4 fColor;
-` + kRenderFunc + `
-	void main() {
-	vec3 start = vColor;
-	gl_FragDepth = 0.0;
-	vec3 backPosition = GetBackPosition(start);
-	vec3 dir = normalize(backPosition - start);
-	clipVolumeStart(start, backPosition);
-	float len = length(backPosition - start);
-	float lenVox = length((texVox * start) - (texVox * backPosition));
-	if ((lenVox < 0.5) || (len > 3.0)) { //length limit for parallel rays
-		fColor = vec4(0.0,0.0,0.0,0.0);
-		return;
-	}
-	float sliceSize = len / lenVox; //e.g. if ray length is 1.0 and traverses 50 voxels, each voxel is 0.02 in unit cube
-	float stepSize = sliceSize; //quality: larger step is faster traversal, but fewer samples
-	float opacityCorrection = stepSize/sliceSize;
-	vec4 deltaDir = vec4(dir.xyz * stepSize, stepSize);
-	vec4 samplePos = vec4(start.xyz, 0.0); //ray position
-	vec4 colAcc = vec4(0.0,0.0,0.0,0.0);
-	vec4 firstHit = vec4(0.0,0.0,0.0,2.0 * len);
-	const float earlyTermination = 0.95;
-	float backNearest = len; //assume no hit
-	float dis = len;
-	//check if axial plane is closest
-	vec4 aClip = vec4(0.0, 0.0, 1.0, (1.0- clipPlane.z) - 0.5);
-	float adis = (-aClip.a - dot(aClip.xyz, samplePos.xyz-0.5)) / dot(dir,aClip.xyz);
-	if (adis > 0.0)
-		dis = min(adis, dis);
-	//check of coronal plane is closest
-	vec4 cClip = vec4(0.0, 1.0, 0.0, (1.0- clipPlane.y) - 0.5);
-	float cdis = (-cClip.a - dot(cClip.xyz, samplePos.xyz-0.5)) / dot(dir,cClip.xyz);
-	if (cdis > 0.0)
-		dis = min(cdis, dis);
-	//check if coronal slice is closest
-	vec4 sClip = vec4(1.0, 0.0, 0.0, (1.0- clipPlane.x) - 0.5);
-	float sdis = (-sClip.a - dot(sClip.xyz, samplePos.xyz-0.5)) / dot(dir,sClip.xyz);
-	if (sdis > 0.0)
-		dis = min(sdis, dis);
-	if ((dis > 0.0) && (dis < len)) {
-		samplePos = vec4(samplePos.xyz+dir * dis, dis);
-		colAcc = texture(volume, samplePos.xyz);
-		colAcc.a = earlyTermination;
-		firstHit = samplePos;
-		backNearest = min(backNearest, samplePos.a);
-	}
-	//the following are only used by overlays
-	vec4 clipPlaneColorX = clipPlaneColor;
-	bool isColorPlaneInVolume = false;
-	float lenNoClip = len;
-	bool isClip = false;
-	vec4 clipPos = applyClip(dir, samplePos, len, isClip);
-	float stepSizeFast = sliceSize * 1.9;
-	vec4 deltaDirFast = vec4(dir.xyz * stepSizeFast, stepSizeFast);
-	if (samplePos.a < 0.0)
-		vec4 samplePos = vec4(start.xyz, 0.0); //ray position
-	float ran = fract(sin(gl_FragCoord.x * 12.9898 + gl_FragCoord.y * 78.233) * 43758.5453);
-	samplePos += deltaDir * ran; //jitter ray
-` + kRenderTail;
-var fragRenderShader = `#version 300 es
-#line 215
-precision highp int;
-precision highp float;
-uniform vec3 rayDir;
-uniform vec3 texVox;
-uniform int backgroundMasksOverlays;
-uniform vec3 volScale;
-uniform vec4 clipPlane;
-uniform highp sampler3D volume, overlay;
-uniform float overlays;
-uniform float clipThick;
-uniform vec3 clipLo;
-uniform vec3 clipHi;
-uniform float backOpacity;
-uniform mat4 mvpMtx;
-uniform mat4 matRAS;
-uniform vec4 clipPlaneColor;
-uniform float renderOverlayBlend;
-uniform highp sampler3D drawing;
-uniform highp sampler2D colormap;
-uniform vec2 renderDrawAmbientOcclusionXY;
-in vec3 vColor;
-out vec4 fColor;
-` + kRenderFunc + kRenderInit + `while (samplePos.a <= len) {
-		vec4 colorSample = texture(volume, samplePos.xyz);
-		samplePos += deltaDir; //advance ray position
-		if (colorSample.a >= 0.01) {
-			if (firstHit.a > lenNoClip)
-				firstHit = samplePos;
-			backNearest = min(backNearest, samplePos.a);
-			colorSample.a = 1.0-pow((1.0 - colorSample.a), opacityCorrection);
-			colorSample.rgb *= colorSample.a;
-			colAcc= (1.0 - colAcc.a) * colorSample + colAcc;
-			if ( colAcc.a > earlyTermination )
-				break;
-		}
-	}
-` + kRenderTail;
-var gradientOpacityLutCount = 192;
-var kFragRenderGradientDecl = `#version 300 es
-#line 215
-precision highp int;
-precision highp float;
-uniform vec3 rayDir;
-uniform vec3 texVox;
-uniform int backgroundMasksOverlays;
-uniform vec3 volScale;
-uniform vec4 clipPlane;
-uniform highp sampler3D volume, overlay;
-uniform float overlays;
-uniform float clipThick;
-uniform vec3 clipLo;
-uniform vec3 clipHi;
-uniform float backOpacity;
-uniform mat4 mvpMtx;
-uniform mat4 normMtx;
-uniform mat4 matRAS;
-uniform vec4 clipPlaneColor;
-uniform float renderOverlayBlend;
-uniform highp sampler3D drawing, gradient;
-uniform highp sampler2D colormap;
-uniform highp sampler2D matCap;
-uniform vec2 renderDrawAmbientOcclusionXY;
-uniform float gradientAmount;
-uniform float silhouettePower;
-uniform float gradientOpacity[${gradientOpacityLutCount}];
-in vec3 vColor;
-out vec4 fColor;
-`;
-var fragRenderGradientShader = kFragRenderGradientDecl + kRenderFunc + kRenderInit + `
-	float startPos = samplePos.a;
-	float clipClose = clipPos.a + 3.0 * deltaDir.a; //do not apply gradients near clip plane
-	float brighten = 2.0; //modulating makes average intensity darker 0.5 * 0.5 = 0.25
-	//vec4 prevGrad = vec4(0.0);
-	float silhouetteThreshold = 1.0 - silhouettePower;
-	while (samplePos.a <= len) {
-		vec4 colorSample = texture(volume, samplePos.xyz);
-		if (colorSample.a >= 0.0) {
-			vec4 grad = texture(gradient, samplePos.xyz);
-			grad.rgb = normalize(grad.rgb*2.0 - 1.0);
-			//if (grad.a < prevGrad.a)
-			//	grad.rgb = prevGrad.rgb;
-			//prevGrad = grad;
-			vec3 n = mat3(normMtx) * grad.rgb;
-			n.y = - n.y;
-			vec4 mc = vec4(texture(matCap, n.xy * 0.5 + 0.5).rgb, 1.0) * brighten;
-			mc = mix(vec4(1.0), mc, gradientAmount);
-			if (samplePos.a > clipClose)
-				colorSample.rgb *= mc.rgb;
-			if (firstHit.a > lenNoClip)
-				firstHit = samplePos;
-			backNearest = min(backNearest, samplePos.a);
-			colorSample.a = 1.0-pow((1.0 - colorSample.a), opacityCorrection);
-			int gradIdx = int(grad.a * ${gradientOpacityLutCount}.0);
-			colorSample.a *= gradientOpacity[gradIdx];
-			float lightNormDot = dot(grad.rgb, rayDir);
-			// n.b. "lightNormDor" is cosTheta, "silhouettePower" is Fresnel effect exponent
- 			colorSample.a *= pow(1.0 - abs(lightNormDot), silhouettePower);
- 			float viewAlign = abs(lightNormDot); // 0 = perpendicular, 1 = aligned
- 			// linearly map silhouettePower (0..1) to a threshold range, e.g., [1.0, 0.0]
- 			// Cull voxels that are too aligned with the view direction
- 			if (viewAlign > silhouetteThreshold)
- 				colorSample.a = 0.0;
-			colorSample.rgb *= colorSample.a;
-			colAcc= (1.0 - colAcc.a) * colorSample + colAcc;
-			if ( colAcc.a > earlyTermination )
-				break;
-		}
-		samplePos += deltaDir; //advance ray position
-	}
-` + kRenderTail;
-var fragRenderGradientValuesShader = kFragRenderGradientDecl + kRenderFunc + kRenderInit + `
-	float startPos = samplePos.a;
-	float clipClose = clipPos.a + 3.0 * deltaDir.a; //do not apply gradients near clip plane
-	float brighten = 2.0; //modulating makes average intensity darker 0.5 * 0.5 = 0.25
-	//vec4 prevGrad = vec4(0.0);
-	while (samplePos.a <= len) {
-		vec4 colorSample = texture(volume, samplePos.xyz);
-		if (colorSample.a >= 0.0) {
-			vec4 grad = texture(gradient, samplePos.xyz);
-			colorSample.rgb = abs(normalize(grad.rgb*2.0 - 1.0));
-			if (firstHit.a > lenNoClip)
-				firstHit = samplePos;
-			backNearest = min(backNearest, samplePos.a);
-			colorSample.a = 1.0-pow((1.0 - colorSample.a), opacityCorrection);
-			colorSample.rgb *= colorSample.a;
-			colAcc= (1.0 - colAcc.a) * colorSample + colAcc;
-			if ( colAcc.a > earlyTermination )
-				break;
-		}
-		samplePos += deltaDir; //advance ray position
-	}
-` + kRenderTail;
-var vertSliceMMShader = `#version 300 es
-#line 392
-layout(location=0) in vec3 pos;
-uniform int axCorSag;
-uniform mat4 mvpMtx;
-uniform mat4 frac2mm;
-uniform float slice;
-out vec3 texPos;
-void main(void) {
-	texPos = vec3(pos.x, pos.y, slice);
-	if (axCorSag > 1)
-		texPos = vec3(slice, pos.x, pos.y);
-	else if (axCorSag > 0)
-		texPos = vec3(pos.x, slice, pos.y);
-	vec4 mm = frac2mm * vec4(texPos, 1.0);
-	gl_Position = mvpMtx * mm;
-}`;
-var kFragSliceHead = `#version 300 es
-#line 411
-precision highp int;
-precision highp float;
-uniform highp sampler3D volume, overlay;
-uniform int backgroundMasksOverlays;
-uniform float overlayOutlineWidth;
-uniform float overlayAlphaShader;
-uniform int axCorSag;
-uniform float overlays;
-uniform float opacity;
-uniform float drawOpacity;
-uniform bool isAlphaClipDark;
-uniform highp sampler3D drawing;
-uniform highp sampler2D colormap;
-in vec3 texPos;
-out vec4 color;` + kDrawFunc + `void main() {
-	//color = vec4(1.0, 0.0, 1.0, 1.0);return;
-	vec4 background = texture(volume, texPos);
-	color = vec4(background.rgb, opacity);
-	if ((isAlphaClipDark) && (background.a == 0.0)) color.a = 0.0; //FSLeyes clipping range
-	vec4 ocolor = vec4(0.0);
-	float overlayAlpha = overlayAlphaShader;
-	if (overlays > 0.0) {
-		ocolor = texture(overlay, texPos);
-		//dFdx for "boxing" issue 435 has aliasing on some implementations (coarse vs fine)
-		//however, this only identifies 50% of the edges due to aliasing effects
-		// http://www.aclockworkberry.com/shader-derivative-functions/
-		// https://bgolus.medium.com/distinctive-derivative-differences-cce38d36797b
-		//if ((ocolor.a >= 1.0) && ((dFdx(ocolor.a) != 0.0) || (dFdy(ocolor.a) != 0.0)  ))
-		//	ocolor.rbg = vec3(0.0, 0.0, 0.0);
-		bool isOutlineBelowNotAboveThreshold = true;
-		if (isOutlineBelowNotAboveThreshold) {
-			if ((overlayOutlineWidth > 0.0) && (ocolor.a < 1.0)) { //check voxel neighbors for edge
-				vec3 vx = (overlayOutlineWidth ) / vec3(textureSize(overlay, 0));
-				//6 voxel neighbors that share a face
-				vec3 vxR = vec3(texPos.x+vx.x, texPos.y, texPos.z);
-				vec3 vxL = vec3(texPos.x-vx.x, texPos.y, texPos.z);
-				vec3 vxA = vec3(texPos.x, texPos.y+vx.y, texPos.z);
-				vec3 vxP = vec3(texPos.x, texPos.y-vx.y, texPos.z);
-				vec3 vxS = vec3(texPos.x, texPos.y, texPos.z+vx.z);
-				vec3 vxI = vec3(texPos.x, texPos.y, texPos.z-vx.z);
-				float a = 0.0;
-				if (axCorSag != 2) {
-					a = max(a, texture(overlay, vxR).a);
-					a = max(a, texture(overlay, vxL).a);
-				}
-				if (axCorSag != 1) {
-					a = max(a, texture(overlay, vxA).a);
-					a = max(a, texture(overlay, vxP).a);
-				}
-				if (axCorSag != 0) {
-					a = max(a, texture(overlay, vxS).a);
-					a = max(a, texture(overlay, vxI).a);
-				}
-				bool isCheckCorners = true;
-				if (isCheckCorners) {
-					//12 voxel neighbors that share an edge
-					vec3 vxRA = vec3(texPos.x+vx.x, texPos.y+vx.y, texPos.z);
-					vec3 vxLA = vec3(texPos.x-vx.x, texPos.y+vx.y, texPos.z);
-					vec3 vxRP = vec3(texPos.x+vx.x, texPos.y-vx.y, texPos.z);
-					vec3 vxLP = vec3(texPos.x-vx.x, texPos.y-vx.y, texPos.z);
-					vec3 vxRS = vec3(texPos.x+vx.x, texPos.y, texPos.z+vx.z);
-					vec3 vxLS = vec3(texPos.x-vx.x, texPos.y, texPos.z+vx.z);
-					vec3 vxRI = vec3(texPos.x+vx.x, texPos.y, texPos.z-vx.z);
-					vec3 vxLI = vec3(texPos.x-vx.x, texPos.y, texPos.z-vx.z);
-					vec3 vxAS = vec3(texPos.x, texPos.y+vx.y, texPos.z+vx.z);
-					vec3 vxPS = vec3(texPos.x, texPos.y-vx.y, texPos.z+vx.z);
-					vec3 vxAI = vec3(texPos.x, texPos.y+vx.y, texPos.z-vx.z);
-					vec3 vxPI = vec3(texPos.x, texPos.y-vx.y, texPos.z-vx.z);
-
-					if (axCorSag == 0) { //axial corners
-						a = max(a, texture(overlay, vxRA).a);
-						a = max(a, texture(overlay, vxLA).a);
-						a = max(a, texture(overlay, vxRP).a);
-						a = max(a, texture(overlay, vxLP).a);
-					}
-					if (axCorSag == 1) { //coronal corners
-						a = max(a, texture(overlay, vxRS).a);
-						a = max(a, texture(overlay, vxLS).a);
-						a = max(a, texture(overlay, vxRI).a);
-						a = max(a, texture(overlay, vxLI).a);
-					}
-					if (axCorSag == 2) { //sagittal corners
-						a = max(a, texture(overlay, vxAS).a);
-						a = max(a, texture(overlay, vxPS).a);
-						a = max(a, texture(overlay, vxAI).a);
-						a = max(a, texture(overlay, vxPI).a);
-					}
-				}
-				if (a >= 1.0) {
-					ocolor = vec4(0.0, 0.0, 0.0, 1.0);
-					overlayAlpha = 1.0;
-				}
-			}
-
-		} else {
-			if ((overlayOutlineWidth > 0.0) && (ocolor.a >= 1.0)) { //check voxel neighbors for edge
-				vec3 vx = (overlayOutlineWidth ) / vec3(textureSize(overlay, 0));
-				vec3 vxR = vec3(texPos.x+vx.x, texPos.y, texPos.z);
-				vec3 vxL = vec3(texPos.x-vx.x, texPos.y, texPos.z);
-				vec3 vxA = vec3(texPos.x, texPos.y+vx.y, texPos.z);
-				vec3 vxP = vec3(texPos.x, texPos.y-vx.y, texPos.z);
-				vec3 vxS = vec3(texPos.x, texPos.y, texPos.z+vx.z);
-				vec3 vxI = vec3(texPos.x, texPos.y, texPos.z-vx.z);
-				float a = 1.0;
-				if (axCorSag != 2) {
-					a = min(a, texture(overlay, vxR).a);
-					a = min(a, texture(overlay, vxL).a);
-				}
-				if (axCorSag != 1) {
-					a = min(a, texture(overlay, vxA).a);
-					a = min(a, texture(overlay, vxP).a);
-				}
-				if (axCorSag != 0) {
-					a = min(a, texture(overlay, vxS).a);
-					a = min(a, texture(overlay, vxI).a);
-				}
-				if (a < 1.0) {
-					ocolor = vec4(0.0, 0.0, 0.0, 1.0);
-					overlayAlpha = 1.0;
-				}
-			}
-		} //outline above threshold
-	}
-
-`;
-var fragSlice2DShader = `#version 300 es
-#line 411
-precision highp int;
-precision highp float;
-uniform highp sampler2D volume, overlay;
-uniform int backgroundMasksOverlays;
-uniform float overlayOutlineWidth;
-uniform float overlayAlphaShader;
-uniform int axCorSag;
-uniform float overlays;
-uniform float opacity;
-uniform float drawOpacity;
-uniform bool isAlphaClipDark;
-uniform highp sampler2D drawing;
-uniform highp sampler2D colormap;
-in vec3 texPos;
-out vec4 color;` + kDrawFunc + `void main() {
-	//color = vec4(1.0, 0.0, 1.0, 1.0);return;
-	vec4 background = texture(volume, texPos.xy);
-	color = vec4(background.rgb, opacity);
-	if ((isAlphaClipDark) && (background.a == 0.0)) color.a = 0.0; //FSLeyes clipping range
-	vec4 dcolor = drawColor(texture(drawing, texPos.xy).r, drawOpacity);
-	if (dcolor.a > 0.0) {
-		color.rgb = mix(color.rgb, dcolor.rgb, dcolor.a);
-		color.a = max(drawOpacity, color.a);
-	}
-}`;
-var kFragSliceTail = `	ocolor.a *= overlayAlpha;
-	vec4 dcolor = drawColor(texture(drawing, texPos).r, drawOpacity);
-	if (dcolor.a > 0.0) {
-		color.rgb = mix(color.rgb, dcolor.rgb, dcolor.a);
-		color.a = max(drawOpacity, color.a);
-	}
-	if ((backgroundMasksOverlays > 0) && (background.a == 0.0))
-		return;
-	float a = color.a + ocolor.a * (1.0 - color.a); // premultiplied alpha
-	if (a == 0.0) return;
-	color.rgb = mix(color.rgb, ocolor.rgb, ocolor.a / a);
-	color.a = a;
-}`;
-var fragSliceMMShader = kFragSliceHead + kFragSliceTail;
-var fragSliceV1Shader = kFragSliceHead + `	if (ocolor.a > 0.0) {
-		//https://gamedev.stackexchange.com/questions/102889/is-it-possible-to-convert-vec4-to-int-in-glsl-using-opengl-es
-		uint alpha = uint(ocolor.a * 255.0);
-		vec3 xyzFlip = vec3(float((uint(1) & alpha) > uint(0)), float((uint(2) & alpha) > uint(0)), float((uint(4) & alpha) > uint(0)));
-		//convert from 0 and 1 to -1 and 1
-		xyzFlip = (xyzFlip * 2.0) - 1.0;
-		//https://math.stackexchange.com/questions/1905533/find-perpendicular-distance-from-point-to-line-in-3d
-		//v1 principle direction of tensor for this voxel
-		vec3 v1 = ocolor.rgb;
-		//flips encode polarity to convert from 0..1 to -1..1 (27 bits vs 24 bit precision)
-		v1 = normalize( v1 * xyzFlip);
-		vec3 vxl = fract(texPos * vec3(textureSize(volume, 0))) - 0.5;
-		//vxl coordinates now -0.5..+0.5 so 0,0,0 is origin
-		vxl.x = -vxl.x;
-		float t = dot(vxl,v1);
-		vec3 P = t * v1;
-		float dx = length(P-vxl);
-		ocolor.a = 1.0 - smoothstep(0.2,0.25, dx);
-		//if modulation was applied, use that to scale alpha not color:
-		ocolor.a *= length(ocolor.rgb);
-		ocolor.rgb = normalize(ocolor.rgb);
-		//compute distance one half voxel closer to viewer:
-		float pan = 0.5;
-		if (axCorSag == 0)
-			vxl.z -= pan;
-		if (axCorSag == 1)
-			vxl.y -= pan;
-		if (axCorSag == 2)
-			vxl.x += pan;
-		t = dot(vxl,v1);
-		P = t * v1;
-		float dx2 = length(P-vxl);
-		ocolor.rgb += (dx2-dx-(0.5 * pan)) * 1.0;
-	}
-` + kFragSliceTail;
-var fragRectShader = `#version 300 es
-#line 480
-precision highp int;
-precision highp float;
-uniform vec4 lineColor;
-out vec4 color;
-void main() {
-	color = lineColor;
-}`;
-var fragRectOutlineShader = `#version 300 es
-#line 723
-precision highp int;
-precision highp float;
-
-uniform vec4 lineColor;
-uniform vec4 leftTopWidthHeight;
-uniform float thickness; // line thickness in pixels
-uniform vec2 canvasWidthHeight;
-
-out vec4 color;
-
-void main() {
-    // fragment position in screen coordinates
-    vec2 fragCoord = gl_FragCoord.xy;
-
-    // canvas height
-    float canvasHeight = canvasWidthHeight.y;
-
-    // 'top' and 'bottom' to match gl_FragCoord.y coordinate system
-    float top = canvasHeight - leftTopWidthHeight.y;
-    float bottom = top - leftTopWidthHeight.w;
-
-    // left and right edges
-    float left = leftTopWidthHeight.x;
-    float right = left + leftTopWidthHeight.z;
-
-    bool withinLeft = fragCoord.x >= left && fragCoord.x <= left + thickness;
-    bool withinRight = fragCoord.x <= right && fragCoord.x >= right - thickness;
-    bool withinTop = fragCoord.y <= top && fragCoord.y >= top - thickness;
-    bool withinBottom = fragCoord.y >= bottom && fragCoord.y <= bottom + thickness;
-
-    bool isOutline = withinLeft || withinRight || withinTop || withinBottom;
-
-    if (isOutline) {
-        color = lineColor;
-    } else {
-        discard; 
-    }
-}`;
-var vertColorbarShader = `#version 300 es
-#line 490
-layout(location=0) in vec3 pos;
-uniform vec2 canvasWidthHeight;
-uniform vec4 leftTopWidthHeight;
-out vec2 vColor;
-void main(void) {
-	//convert pixel x,y space 1..canvasWidth,1..canvasHeight to WebGL 1..-1,-1..1
-	vec2 frac;
-	frac.x = (leftTopWidthHeight.x + (pos.x * leftTopWidthHeight.z)) / canvasWidthHeight.x; //0..1
-	frac.y = 1.0 - ((leftTopWidthHeight.y + ((1.0 - pos.y) * leftTopWidthHeight.w)) / canvasWidthHeight.y); //1..0
-	frac = (frac * 2.0) - 1.0;
-	gl_Position = vec4(frac, 0.0, 1.0);
-	vColor = pos.xy;
-}`;
-var fragColorbarShader = `#version 300 es
-#line 506
-precision highp int;
-precision highp float;
-uniform highp sampler2D colormap;
-uniform float layer;
-in vec2 vColor;
-out vec4 color;
-void main() {
-	float nlayer = float(textureSize(colormap, 0).y);
-	float fmap = (0.5 + layer) / nlayer;
-	color = vec4(texture(colormap, vec2(vColor.x, fmap)).rgb, 1.0);
-}`;
-var vertRectShader = `#version 300 es
-#line 520
-layout(location=0) in vec3 pos;
-uniform vec2 canvasWidthHeight;
-uniform vec4 leftTopWidthHeight;
-void main(void) {
-	//convert pixel x,y space 1..canvasWidth,1..canvasHeight to WebGL 1..-1,-1..1
-	vec2 frac;
-	frac.x = (leftTopWidthHeight.x + (pos.x * leftTopWidthHeight.z)) / canvasWidthHeight.x; //0..1
-	frac.y = 1.0 - ((leftTopWidthHeight.y + ((1.0 - pos.y) * leftTopWidthHeight.w)) / canvasWidthHeight.y); //1..0
-	frac = (frac * 2.0) - 1.0;
-	gl_Position = vec4(frac, 0.0, 1.0);
-}`;
-var vertLineShader = `#version 300 es
-#line 534
-layout(location=0) in vec3 pos;
-uniform vec2 canvasWidthHeight;
-uniform float thickness;
-uniform vec4 startXYendXY;
-void main(void) {
-	vec2 posXY = mix(startXYendXY.xy, startXYendXY.zw, pos.x);
-	vec2 dir = normalize(startXYendXY.xy - startXYendXY.zw);
-	posXY += vec2(-dir.y, dir.x) * thickness * (pos.y - 0.5);
-	posXY.x = (posXY.x) / canvasWidthHeight.x; //0..1
-	posXY.y = 1.0 - (posXY.y / canvasWidthHeight.y); //1..0
-	gl_Position = vec4((posXY * 2.0) - 1.0, 0.0, 1.0);
-}`;
-var vertLine3DShader = `#version 300 es
-#line 534
-layout(location=0) in vec3 pos;
-uniform vec2 canvasWidthHeight;
-uniform float thickness;
-uniform vec2 startXY;
-uniform vec3 endXYZ; // transformed XYZ point
-void main(void) {	
-	vec2 posXY = mix(startXY.xy, endXYZ.xy, pos.x);
-	vec2 startDiff = endXYZ.xy - startXY.xy;
-	float startDistance = length(startDiff);
-	vec2 diff = endXYZ.xy - posXY;
-	float currentDistance = length(diff);
-	vec2 dir = normalize(startXY.xy - endXYZ.xy);
-	posXY += vec2(-dir.y, dir.x) * thickness * (pos.y - 0.5);
-	posXY.x = (posXY.x) / canvasWidthHeight.x; //0..1
-	posXY.y = 1.0 - (posXY.y / canvasWidthHeight.y); //1..0	
-	float z = endXYZ.z * ( 1.0 - abs(currentDistance/startDistance)); 
-	gl_Position = vec4((posXY * 2.0) - 1.0, z, 1.0);
-}`;
-var vertBmpShader = `#version 300 es
-#line 549
-layout(location=0) in vec3 pos;
-uniform vec2 canvasWidthHeight;
-uniform vec4 leftTopWidthHeight;
-out vec2 vUV;
-void main(void) {
-	//convert pixel x,y space 1..canvasWidth,1..canvasHeight to WebGL 1..-1,-1..1
-	vec2 frac;
-	frac.x = (leftTopWidthHeight.x + (pos.x * leftTopWidthHeight.z)) / canvasWidthHeight.x; //0..1
-	frac.y = 1.0 - ((leftTopWidthHeight.y + ((1.0 - pos.y) * leftTopWidthHeight.w)) / canvasWidthHeight.y); //1..0
-	frac = (frac * 2.0) - 1.0;
-	gl_Position = vec4(frac, 0.0, 1.0);
-	vUV = vec2(pos.x, 1.0 - pos.y);
-}`;
-var fragBmpShader = `#version 300 es
-#line 565
-precision highp int;
-precision highp float;
-uniform highp sampler2D bmpTexture;
-in vec2 vUV;
-out vec4 color;
-void main() {
-	color = texture(bmpTexture, vUV);
-}`;
-var vertFontShader = `#version 300 es
-#line 576
-layout(location=0) in vec3 pos;
-uniform vec2 canvasWidthHeight;
-uniform vec4 leftTopWidthHeight;
-uniform vec4 uvLeftTopWidthHeight;
-out vec2 vUV;
-void main(void) {
-	//convert pixel x,y space 1..canvasWidth,1..canvasHeight to WebGL 1..-1,-1..1
-	vec2 frac;
-	frac.x = (leftTopWidthHeight.x + (pos.x * leftTopWidthHeight.z)) / canvasWidthHeight.x; //0..1
-	frac.y = 1.0 - ((leftTopWidthHeight.y + ((1.0 - pos.y) * leftTopWidthHeight.w)) / canvasWidthHeight.y); //1..0
-	frac = (frac * 2.0) - 1.0;
-	gl_Position = vec4(frac, 0.0, 1.0);
-	vUV = vec2(uvLeftTopWidthHeight.x + (pos.x * uvLeftTopWidthHeight.z), uvLeftTopWidthHeight.y  + ((1.0 - pos.y) * uvLeftTopWidthHeight.w) );
-}`;
-var fragFontShader = `#version 300 es
-#line 593
-precision highp int;
-precision highp float;
-uniform highp sampler2D fontTexture;
-uniform vec4 fontColor;
-uniform float screenPxRange;
-in vec2 vUV;
-out vec4 color;
-float median(float r, float g, float b) {
-	return max(min(r, g), min(max(r, g), b));
-}
-void main() {
-	vec3 msd = texture(fontTexture, vUV).rgb;
-	float sd = median(msd.r, msd.g, msd.b);
-	float screenPxDistance = screenPxRange*(sd - 0.5);
-	float opacity = clamp(screenPxDistance + 0.5, 0.0, 1.0);
-	color = vec4(fontColor.rgb , fontColor.a * opacity);
-}`;
-var vertCircleShader = `#version 300 es
-layout(location=0) in vec3 pos;
-uniform vec2 canvasWidthHeight;
-uniform vec4 leftTopWidthHeight;
-uniform vec4 uvLeftTopWidthHeight;
-out vec2 vUV;
-void main(void) {
-	//convert pixel x,y space 1..canvasWidth,1..canvasHeight to WebGL 1..-1,-1..1
-	vec2 frac;
-	frac.x = (leftTopWidthHeight.x + (pos.x * leftTopWidthHeight.z)) / canvasWidthHeight.x; //0..1
-	frac.y = 1.0 - ((leftTopWidthHeight.y + ((1.0 - pos.y) * leftTopWidthHeight.w)) / canvasWidthHeight.y); //1..0
-	frac = (frac * 2.0) - 1.0;
-	gl_Position = vec4(frac, 0.0, 1.0);
-	vUV = pos.xy;
-}`;
-var fragCircleShader = `#version 300 es
-precision highp int;
-precision highp float;
-uniform vec4 circleColor;
-uniform float fillPercent;
-in vec2 vUV;
-out vec4 color;
-void main() {
-	/* Check if the pixel is inside the circle
-		 and color it with a gradient. Otherwise, color it 
-		 transparent   */
-	float distance = length(vUV-vec2(0.5,0.5));
-	if ( distance < 0.5 && distance >= (1.0 - fillPercent) / 2.0){
-			color = vec4(circleColor.r,circleColor.g,circleColor.b,circleColor.a) ;			
-	}else{
-			color = vec4(0.0,0.0,0.0,0.0);
-	}
-}
-`;
-var vertOrientShader = `#version 300 es
-#line 613
-precision highp int;
-precision highp float;
-in vec3 vPos;
-out vec2 TexCoord;
-void main() {
-	TexCoord = vPos.xy;
-	gl_Position = vec4( (vPos.xy-vec2(0.5,0.5)) * 2.0, 0.0, 1.0);
-}`;
-var fragOrientShaderU = `#version 300 es
-uniform highp usampler3D intensityVol;
-`;
-var fragOrientShaderI = `#version 300 es
-uniform highp isampler3D intensityVol;
-`;
-var fragOrientShaderF = `#version 300 es
-uniform highp sampler3D intensityVol;
-`;
-var fragOrientShaderAtlas = `#line 1042
-precision highp int;
-precision highp float;
-in vec2 TexCoord;
-out vec4 FragColor;
-uniform bool isAdditiveBlend;
-uniform float coordZ;
-uniform float layer;
-uniform highp sampler2D colormap;
-uniform lowp sampler3D blend3D;
-uniform float opacity;
-uniform uint activeIndex;
-uniform vec4 xyzaFrac;
-uniform mat4 mtx;
-float textureWidth;
-float nlayer;
-float layerY;
-
-vec4 scalar2color(uint idx) {
-	float fx = (float(idx) + 0.5) / textureWidth;
-	vec4 clr = texture(colormap, vec2(fx, layerY)).rgba;
-	if (clr.a > 0.0)
-		clr.a = 1.0;
-	clr.a *= opacity;
-	return clr;
-}
-void main(void) {
-	vec4 vx = vec4(TexCoord.x, TexCoord.y, coordZ, 1.0) * mtx;
-	uint idx = uint(texture(intensityVol, vx.xyz).r);
-	if (idx == uint(0)) {
-		if (layer < 1.0) {
-			FragColor = vec4(0.0, 0.0, 0.0, 0.0);
-			return;
-		}
-		FragColor = texture(blend3D, vec3(TexCoord.xy, coordZ));
-		return;
-	}
-	textureWidth = float(textureSize(colormap, 0).x);
-	nlayer = float(textureSize(colormap, 0).y);
-	layerY = ((2.0 * layer) + 1.5) / nlayer;
-	//idx = ((idx - uint(1)) % uint(100))+uint(1);
-	FragColor = scalar2color(idx);
-	bool isBorder = false;
-	vx = vec4(TexCoord.x+xyzaFrac.x, TexCoord.y, coordZ, 1.0) * mtx;
-	uint R = uint(texture(intensityVol, vx.xyz).r);
-	vx = vec4(TexCoord.x-xyzaFrac.x, TexCoord.y, coordZ, 1.0) * mtx;
-	uint L = uint(texture(intensityVol, vx.xyz).r);
-	vx = vec4(TexCoord.x, TexCoord.y+xyzaFrac.y, coordZ, 1.0) * mtx;
-	uint A = uint(texture(intensityVol, vx.xyz).r);
-	vx = vec4(TexCoord.x, TexCoord.y-xyzaFrac.y, coordZ, 1.0) * mtx;
-	uint P = uint(texture(intensityVol, vx.xyz).r);
-	vx = vec4(TexCoord.x, TexCoord.y, coordZ+xyzaFrac.z, 1.0) * mtx;
-	uint S = uint(texture(intensityVol, vx.xyz).r);
-	vx = vec4(TexCoord.x, TexCoord.y, coordZ-xyzaFrac.z, 1.0) * mtx;
-	uint I = uint(texture(intensityVol, vx.xyz).r);
-	if (xyzaFrac.a != 0.0) { //outline
-		if ((idx != R) || (idx != L) || (idx != A) || (idx != P) || (idx != S) || (idx != I)) {
-			isBorder = true;
-			if (xyzaFrac.a > 0.0)
-				FragColor.a = xyzaFrac.a;
-			else
-				FragColor = vec4(0.0, 0.0, 0.0, 1.0);
-		}
-	}
-	vec4 centerColor = FragColor;
-	FragColor.a += scalar2color(R).a;
-	FragColor.a += scalar2color(L).a;
-	FragColor.a += scalar2color(A).a;
-	FragColor.a += scalar2color(P).a;
-	FragColor.a += scalar2color(S).a;
-	FragColor.a += scalar2color(I).a;
-	FragColor.a /= 7.0;
-	if ((!isBorder) &&(idx == activeIndex)) {
-		if (centerColor.a > 0.5)
-			FragColor.a *= 0.4;
-		else
-			FragColor.a =0.8;
-	}
-	if (layer < 1.0) return;
-		vec4 prevColor = texture(blend3D, vec3(TexCoord.xy, coordZ));
-		// https://en.wikipedia.org/wiki/Alpha_compositing
-		float aout = FragColor.a + (1.0 - FragColor.a) * prevColor.a;
-		if (aout <= 0.0) return;
-		if (isAdditiveBlend)
-			FragColor.rgb = ((FragColor.rgb * FragColor.a) + (prevColor.rgb * prevColor.a)) / aout;
-		else
-			FragColor.rgb = ((FragColor.rgb * FragColor.a) + (prevColor.rgb * prevColor.a * (1.0 - FragColor.a))) / aout;
-		FragColor.a = aout;
-}`;
-var fragOrientShader = `#line 691
-precision highp int;
-precision highp float;
-in vec2 TexCoord;
-out vec4 FragColor;
-uniform float coordZ;
-uniform float layer;
-uniform float scl_slope;
-uniform float scl_inter;
-uniform float cal_max;
-uniform float cal_min;
-uniform float cal_maxNeg;
-uniform float cal_minNeg;
-uniform bool isAlphaThreshold;
-uniform bool isColorbarFromZero;
-uniform bool isAdditiveBlend;
-uniform highp sampler2D colormap;
-uniform lowp sampler3D blend3D;
-uniform int modulation;
-uniform highp sampler3D modulationVol;
-uniform float opacity;
-uniform mat4 mtx;
-void main(void) {
-	vec4 vx = vec4(TexCoord.xy, coordZ, 1.0) * mtx;
-	if ((vx.x < 0.0) || (vx.x > 1.0) || (vx.y < 0.0) || (vx.y > 1.0) || (vx.z < 0.0) || (vx.z > 1.0)) {
-		//set transparent if out of range
-		//https://webglfundamentals.org/webgl/webgl-3d-textures-repeat-clamp.html
-		FragColor = texture(blend3D, vec3(TexCoord.xy, coordZ));
-		return;
-	}
-	float f = (scl_slope * float(texture(intensityVol, vx.xyz).r)) + scl_inter;
-	float mn = cal_min;
-	float mx = cal_max;
-	if ((isAlphaThreshold) || (isColorbarFromZero))
-		mn = 0.0;
-	float r = max(0.00001, abs(mx - mn));
-	mn = min(mn, mx);
-	float txl = mix(0.0, 1.0, (f - mn) / r);
-	if (f > mn) { //issue1139: survives threshold, so round up to opaque voxel
-		txl = max(txl, 2.0/256.0);
-	}
-	//https://stackoverflow.com/questions/5879403/opengl-texture-coordinates-in-pixel-space
-	float nlayer = float(textureSize(colormap, 0).y);
-	//each volume has two color maps:
-	// (layer*2) = negative and (layer * 2) + 1 = positive
-	float y = ((2.0 * layer) + 1.5)/nlayer;
-	FragColor = texture(colormap, vec2(txl, y)).rgba;
-	//negative colors
-	mn = cal_minNeg;
-	mx = cal_maxNeg;
-	if ((isAlphaThreshold) || (isColorbarFromZero))
-		mx = 0.0;
-	//if ((!isnan(cal_minNeg)) && ( f < mx)) {
-	if ((cal_minNeg < cal_maxNeg) && ( f < mx)) {
-		r = max(0.00001, abs(mx - mn));
-		mn = min(mn, mx);
-		txl = 1.0 - mix(0.0, 1.0, (f - mn) / r);
-		//issue1139: survives threshold, so round up to opaque voxel
-		txl = max(txl, 2.0/256.0);
-		y = ((2.0 * layer) + 0.5)/nlayer;
-		FragColor = texture(colormap, vec2(txl, y));
-	}
-	if (layer > 0.7)
-		FragColor.a = step(0.00001, FragColor.a);
-	//if (modulation > 10)
-	//	FragColor.a *= texture(modulationVol, vx.xyz).r;
-	//	FragColor.rgb *= texture(modulationVol, vx.xyz).r;
-	if (isAlphaThreshold) {
-		if ((cal_minNeg != cal_maxNeg) && ( f < 0.0) && (f > cal_maxNeg))
-			FragColor.a = pow(-f / -cal_maxNeg, 2.0);
-		else if ((f > 0.0) && (cal_min > 0.0))
-			FragColor.a *= pow(f / cal_min, 2.0); //issue435:  A = (V/X)**2
-		//FragColor.g = 0.0;
-	} else if (isColorbarFromZero) {
-		if ((cal_minNeg != cal_maxNeg) && ( f < 0.0) && (f > cal_maxNeg))
-			FragColor.a = 0.0;
-		else if ((f > 0.0) && (cal_min > 0.0) && (f < cal_min))
-			FragColor.a *= 0.0;
-
-	}
-	if (modulation == 1) {
-		FragColor.rgb *= texture(modulationVol, vx.xyz).r;
-	} else if (modulation == 2) {
-		FragColor.a = texture(modulationVol, vx.xyz).r;
-	}
-	FragColor.a *= opacity;
-	if (layer < 1.0) return;
-	vec4 prevColor = texture(blend3D, vec3(TexCoord.xy, coordZ));
-	// https://en.wikipedia.org/wiki/Alpha_compositing
-	float aout = FragColor.a + (1.0 - FragColor.a) * prevColor.a;
-	if (aout <= 0.0) return;
-	if (isAdditiveBlend)
-		FragColor.rgb = ((FragColor.rgb * FragColor.a) + (prevColor.rgb * prevColor.a)) / aout;
-	else
-		FragColor.rgb = ((FragColor.rgb * FragColor.a) + (prevColor.rgb * prevColor.a * (1.0 - FragColor.a))) / aout;
-	FragColor.a = aout;
-}`;
-var fragSPARQOrientShader = `#line 773
-precision highp int;
-precision highp float;
-in vec2 TexCoord;
-out vec4 FragColor;
-uniform float coordZ;
-uniform float layer;
-uniform float scl_slope;
-uniform float scl_inter;
-uniform float cal_max;
-uniform float cal_min;
-uniform highp sampler2D colormap;
-uniform lowp sampler3D blend3D;
-uniform float opacity;
-uniform mat4 mtx;
-uniform bool hasAlpha;
-uniform int modulation;
-uniform highp sampler3D modulationVol;
-float textureWidth;
-float nlayer;
-float layerY;
-
-vec4 scalar2color(uint idx) {
-	float fx = (float(idx) + 0.5) / textureWidth;
-	vec4 clr = texture(colormap, vec2(fx, layerY)).rgba;
-	if (clr.a > 0.0)
-		clr.a = 1.0;
-	clr.a *= opacity;
-	return clr;
-}
-
-vec4 sparq2color(uvec4 rgba) {
-  // sparc r: max prob index, g: 2nd index, b: max prob a: 2nd prob
-  float prob1 = float(rgba.b)/255.0;
-  float prob2 = float(rgba.a)/255.0;
-  vec4 clr1 = scalar2color(rgba.r);
-  vec4 clr2 = scalar2color(rgba.g);
-  float total = prob1 + prob2;
-  vec4 clr = vec4(clr1.rgb, total);
-  // vec4 clr = vec4(clr1.rgb, prob1);
-  if (total > 0.0) {
-    clr.rgb = mix(clr2.rgb, clr1.rgb, prob1 / total);
-  }
-  return clr;
-}
-void main(void) {
-	vec4 vx = vec4(TexCoord.xy, coordZ, 1.0) * mtx;
-	ivec3 voxelCoord = ivec3(vx.xyz * vec3(textureSize(intensityVol, 0)));
-	uvec4 rgba = texelFetch(intensityVol, voxelCoord, 0);
-	if (rgba.r == uint(0)) {
-		if (layer < 1.0) {
-			FragColor = vec4(0.0, 0.0, 0.0, 0.0);
-			return;
-		}
-		FragColor = texture(blend3D, vec3(TexCoord.xy, coordZ));
-		return;
-	}
-	textureWidth = float(textureSize(colormap, 0).x);
-	nlayer = float(textureSize(colormap, 0).y);
-	layerY = ((2.0 * layer) + 1.5) / nlayer;
-	FragColor = sparq2color(rgba);
-	FragColor.a *= opacity;
-	if (layer < 1.0) return;
-	vec4 prevColor = texture(blend3D, vec3(TexCoord.xy, coordZ));
-	// https://en.wikipedia.org/wiki/Alpha_compositing
-	float aout = FragColor.a + (1.0 - FragColor.a) * prevColor.a;
-	if (aout <= 0.0) return;
-	FragColor.rgb = ((FragColor.rgb * FragColor.a) + (prevColor.rgb * prevColor.a * (1.0 - FragColor.a))) / aout;
-	FragColor.a = aout;
-
-}`;
-var fragRGBOrientShader = `#line 773
-precision highp int;
-precision highp float;
-in vec2 TexCoord;
-out vec4 FragColor;
-uniform float coordZ;
-uniform float layer;
-uniform float scl_slope;
-uniform float scl_inter;
-uniform float cal_max;
-uniform float cal_min;
-uniform highp sampler2D colormap;
-uniform lowp sampler3D blend3D;
-uniform float opacity;
-uniform mat4 mtx;
-uniform bool hasAlpha;
-uniform int modulation;
-uniform highp sampler3D modulationVol;
-void main(void) {
-	vec4 vx = vec4(TexCoord.xy, coordZ, 1.0) * mtx;
-	uvec4 aColor = texture(intensityVol, vx.xyz);
-	FragColor = vec4(float(aColor.r) / 255.0, float(aColor.g) / 255.0, float(aColor.b) / 255.0, float(aColor.a) / 255.0);
-	if (modulation == 1)
-		FragColor.rgb *= texture(modulationVol, vx.xyz).r;
-	if (!hasAlpha) {
-		FragColor.a = (FragColor.r * 0.21 + FragColor.g * 0.72 + FragColor.b * 0.07);
-		//next line: we could binarize alpha, but see rendering of visible human
-		//FragColor.a = step(0.01, FragColor.a);
-	}
-	if (modulation == 2)
-		FragColor.a = texture(modulationVol, vx.xyz).r;
-	FragColor.a *= opacity;
-	if (layer < 1.0) return;
-	vec4 prevColor = texture(blend3D, vec3(TexCoord.xy, coordZ));
-	// https://en.wikipedia.org/wiki/Alpha_compositing
-	float aout = FragColor.a + (1.0 - FragColor.a) * prevColor.a;
-	if (aout <= 0.0) return;
-	FragColor.rgb = ((FragColor.rgb * FragColor.a) + (prevColor.rgb * prevColor.a * (1.0 - FragColor.a))) / aout;
-	FragColor.a = aout;
-}`;
-var vertGrowCutShader = `#version 300 es
-#line 808
-precision highp int;
-precision highp float;
-in vec3 vPos;
-out vec2 TexCoord;
-void main() {
-	TexCoord = vPos.xy;
-	gl_Position = vec4((vPos.x - 0.5) * 2.0, (vPos.y - 0.5) * 2.0, 0.0, 1.0);
-}`;
-var fragGrowCutShader = `#version 300 es
-#line 829
-	precision highp float;
-	precision highp int;
-	precision highp isampler3D;
-	layout(location = 0) out int label;
-	layout(location = 1) out int strength;
-	in vec2 TexCoord;
-	uniform int finalPass;
-	uniform float coordZ;
-	uniform lowp sampler3D in3D;
-	uniform highp isampler3D backTex; // background
-	uniform highp isampler3D labelTex; // label
-	uniform highp isampler3D strengthTex; // strength
-void main(void) {
-	vec3 interpolatedTextureCoordinate = vec3(TexCoord.xy, coordZ);
-	ivec3 size = textureSize(backTex, 0);
-	ivec3 texelIndex = ivec3(floor(interpolatedTextureCoordinate * vec3(size)));
-	int background = texelFetch(backTex, texelIndex, 0).r;
-	label = texelFetch(labelTex, texelIndex, 0).r;
-	strength = texelFetch(strengthTex, texelIndex, 0).r;
-	for (int k = -1; k <= 1; k++) {
-		for (int j = -1; j <= 1; j++) {
-			for (int i = -1; i <= 1; i++) {
-				if (i != 0 && j != 0 && k != 0) {
-					ivec3 neighborIndex = texelIndex + ivec3(i,j,k);
-					int neighborBackground = texelFetch(backTex, neighborIndex, 0).r;
-					int neighborStrength = texelFetch(strengthTex, neighborIndex, 0).r;
-					int strengthCost = abs(neighborBackground - background);
-					int takeoverStrength = neighborStrength - strengthCost;
-					if (takeoverStrength > strength) {
-						strength = takeoverStrength;
-						label = texelFetch(labelTex, neighborIndex, 0).r;
-					}
-				}
-			}
-		}
-	}
-	if (finalPass < 1)
-		return;
-	int ok = 1;
-	ivec4 labelCount = ivec4(0,0,0,0);
-	for (int k = -1; k <= 1; k++)
-		for (int j = -1; j <= 1; j++)
-			for (int i = -1; i <= 1; i++) {
-				ivec3 neighborIndex = texelIndex + ivec3(i,j,k);
-				int ilabel = texelFetch(labelTex, neighborIndex, 0).r;
-				if ((ilabel < 0) || (ilabel > 3))
-					ok = 0;
-				else
-					labelCount[ilabel]++;
-			}
-	if (ok != 1) {
-		return;
-	}
-	int maxIdx = 0;
-	for (int i = 1; i < 4; i++) {
-		if (labelCount[i] > labelCount[maxIdx])
-			maxIdx = i;
-	}
-	label = maxIdx;
-}`;
-var vertSurfaceShader = `#version 300 es
-layout(location=0) in vec3 pos;
-uniform mat4 mvpMtx;
-void main(void) {
-	gl_Position = mvpMtx * vec4(pos, 1.0);
-}`;
-var fragSurfaceShader = `#version 300 es
-precision highp int;
-precision highp float;
-uniform vec4 surfaceColor;
-out vec4 color;
-void main() {
-	color = surfaceColor;
-}`;
-var vertFiberShader = `#version 300 es
-layout(location=0) in vec3 pos;
-layout(location=1) in vec4 clr;
-out vec4 vClr;
-uniform mat4 mvpMtx;
-void main(void) {
-	gl_Position = mvpMtx * vec4(pos, 1.0);
-	vClr = clr;
-}`;
-var fragFiberShader = `#version 300 es
-precision highp int;
-precision highp float;
-in vec4 vClr;
-out vec4 color;
-uniform float opacity;
-void main() {
-	color = vec4(vClr.rgb, opacity);
-}`;
-var vertMeshShader = `#version 300 es
-layout(location=0) in vec3 pos;
-layout(location=1) in vec4 norm;
-layout(location=2) in vec4 clr;
-uniform mat4 mvpMtx;
-//uniform mat4 modelMtx;
-uniform mat4 normMtx;
-out vec4 vClr;
-out vec3 vN;
-out vec4 vP;
-out vec4 vPc;
-void main(void) {
-	vec3 lightPosition = vec3(0.0, 0.0, -10.0);
-	vP = vec4(pos, 1.0);
-	vPc = mvpMtx * vec4(pos, 1.0);
-	gl_Position = vPc;
-	vN = normalize((normMtx * vec4(norm.xyz,1.0)).xyz);
-	//vV = -vec3(modelMtx*vec4(pos,1.0));
-	vClr = clr;
-}`;
-var fragMeshDepthShader = `#version 300 es
-precision highp int;
-precision highp float;
-uniform float opacity;
-out vec4 color;
-vec4 packFloatToVec4i(const float value) {
-	const vec4 bitSh = vec4(256.0*256.0*256.0, 256.0*256.0, 256.0, 1.0);
-	const vec4 bitMsk = vec4(0.0, 1.0/256.0, 1.0/256.0, 1.0/256.0);
-	vec4 res = fract(value * bitSh);
-	res -= res.xxyz * bitMsk;
-	return res;
-}
-void main() {
-	color = packFloatToVec4i(gl_FragCoord.z);
-}`;
-var fragMeshToonShader = `#version 300 es
-precision highp int;
-precision highp float;
-uniform float opacity;
-in vec4 vClr;
-in vec3 vN;
-out vec4 color;
-float stepmix(float edge0, float edge1, float E, float x){
-	float T = clamp(0.5 * (x - edge0 + E) / E, 0.0, 1.0);
-	return mix(edge0, edge1, T);
-}
-void main() {
-	vec3 r = vec3(0.0, 0.0, 1.0);
-	float ambient = 0.3;
-	float diffuse = 0.6;
-	float specular = 0.5;
-	float shininess = 50.0;
-	vec3 n = normalize(vN);
-	vec3 lightPosition = vec3(0.0, 10.0, -5.0);
-	vec3 l = normalize(lightPosition);
-	float df = max(0.0, dot(n, l));
-	float sf = pow(max(dot(reflect(l, n), r), 0.0), shininess);
-	const float A = 0.1;
-	const float B = 0.3;
-	const float C = 0.6;
-	const float D = 1.0;
-	float E = fwidth(df);
-	if (df > A - E && df < A + E) df = stepmix(A, B, E, df);
-	else if (df > B - E && df < B + E) df = stepmix(B, C, E, df);
-	else if (df > C - E && df < C + E) df = stepmix(C, D, E, df);
-	else if (df < A) df = 0.0;
-	else if (df < B) df = B;
-	else if (df < C) df = C;
-	else df = D;
-	E = fwidth(sf);
-	if (sf > 0.5 - E && sf < 0.5 + E)
-		sf = smoothstep(0.5 - E, 0.5 + E, sf);
-	else
-		sf = step(0.5, sf);
-	vec3 a = vClr.rgb * ambient;
-	vec3 d = max(df, 0.0) * vClr.rgb * diffuse;
-	color.rgb = a + d + (specular * sf);
-	color.a = opacity;
-}`;
-var fragMeshOutlineShader = `#version 300 es
-precision highp int;
-precision highp float;
-uniform float opacity;
-in vec4 vClr;
-in vec3 vN;
-out vec4 color;
-void main() {
-	vec3 r = vec3(0.0, 0.0, 1.0); //rayDir: for orthographic projections moving in Z direction (no need for normal matrix)
-	float ambient = 0.3;
-	float diffuse = 0.6;
-	float specular = 0.25;
-	float shininess = 10.0;
-	float PenWidth = 0.6;
-	vec3 n = normalize(vN);
-	vec3 lightPosition = vec3(0.0, 10.0, -5.0);
-	vec3 l = normalize(lightPosition);
-	float lightNormDot = dot(n, l);
-	float view = abs(dot(n,r)); //with respect to viewer
-	if (PenWidth < view) discard;
-	vec3 a = vClr.rgb * ambient;
-	vec3 d = max(lightNormDot, 0.0) * vClr.rgb * diffuse;
-	float s = specular * pow(max(dot(reflect(l, n), r), 0.0), shininess);
-	color.rgb = a + d + s;
-	color.a = opacity;
-}`;
-var fragMeshRimShader = `#version 300 es
-precision highp int;
-precision highp float;
-uniform float opacity;
-in vec4 vClr;
-in vec3 vN;
-out vec4 color;
-void main() {
-	const float thresh = 0.4;
-	const vec3 viewDir = vec3(0.0, 0.0, -1.0);
-	vec3 n = normalize(vN);
-	// use abs() for two-sided lighting, max() for one sided
-	float cosTheta = abs(dot(n, viewDir));
-	// float cosTheta = max(dot(n, viewDir), 0.0);
-	// optional fresnel equation - adjust exponent
-	// cosTheta = 1.0 - pow(1.0 - cosTheta, 2.0);
-	// use step for binary edges, smoothstep for feathered edges
-	// vec3 d = step(thresh, cosTheta) * vClr.rgb;
-	vec3 d = smoothstep(thresh - 0.05, thresh + 0.05, cosTheta) * vClr.rgb;
-	color = vec4(d, opacity);
-}`;
-var fragMeshContourShader = `#version 300 es
-precision highp int;
-precision highp float;
-uniform float opacity;
-in vec4 vClr;
-in vec3 vN;
-out vec4 color;
-void main() {
-  const float edge0 = 0.1;
-  const float edge1 = 0.25;
-  const vec3 viewDir = vec3(0.0, 0.0, -1.0);
-  vec3 n = normalize(vN);
-  float cosTheta = abs(dot(n, viewDir));
-  float alpha = 1.0 - smoothstep(edge0, edge1, cosTheta);
-  if (alpha <= 0.0) {
-    discard;
-  }
-  color = vec4(0.0, 0.0, 0.0, opacity * alpha);
-}`;
-var fragMeshEdgeShader = `#version 300 es
-precision highp int;
-precision highp float;
-uniform float opacity;
-in vec4 vClr;
-in vec3 vN;
-out vec4 color;
-void main() {
-	vec3 r = vec3(0.0, 0.0, 1.0); //rayDir: for orthographic projections moving in Z direction (no need for normal matrix)
-	float diffuse = 1.0;
-	float specular = 0.2;
-	float shininess = 10.0;
-	vec3 n = normalize(vN);
-	vec3 lightPosition = vec3(0.0, 0.0, -5.0);
-	vec3 l = normalize(lightPosition);
-	float lightNormDot = max(dot(n, l), 0.0);
-	vec3 d = lightNormDot * vClr.rgb * diffuse;
-	float s = specular * pow(max(dot(reflect(l, n), r), 0.0), shininess);
-	color = vec4(d + s, opacity);
-}`;
-var fragMeshDiffuseEdgeShader = `#version 300 es
-precision highp int;
-precision highp float;
-uniform float opacity;
-in vec4 vClr;
-in vec3 vN;
-out vec4 color;
-void main() {
-	float diffuse = 1.4;
-	vec3 l = vec3(0.0, 0.0, -1.0);
-	float lightNormDot = max(dot(normalize(vN), l), 0.0);
-	color = vec4(lightNormDot * vClr.rgb * diffuse, opacity);
-}`;
-var fragMeshSpecularEdgeShader = `#version 300 es
-precision highp int;
-precision highp float;
-uniform float opacity;
-in vec4 vClr;
-in vec3 vN;
-out vec4 color;
-void main() {
-	float specularRGB = 0.7;
-	float specularWhite = 0.3;
-	float shininess = 10.0;
-	float diffuse = 1.0;
-	vec3 r = vec3(0.0, 0.0, 1.0); //rayDir: for orthographic projections moving in Z direction (no need for normal matrix)
-	vec3 n = normalize(vN);
-	vec3 l = vec3(0.0, 0.0, -1.0);
-	float lightNormDot = max(dot(n, l), 0.0);
-	vec3 d3 = lightNormDot * vClr.rgb * diffuse;
-	float s = pow(max(dot(reflect(l, n), r), 0.0), shininess);
-	vec3 s3 = specularRGB * s * vClr.rgb;
-	s *= specularWhite;
-	color = vec4(d3 + s3 + s, opacity);
-}`;
-var fragMeshShaderCrevice = `#version 300 es
-precision highp int;
-precision highp float;
-uniform float opacity;
-in vec4 vClr;
-in vec3 vN;
-in vec4 vPc;
-out vec4 color;
-void main() {
-	vec3 n = normalize(vN);
-	// Compute curvature
-	vec3 dx = dFdx(n);
-	vec3 dy = dFdy(n);
-	vec3 xneg = n - dx;
-	vec3 xpos = n + dx;
-	vec3 yneg = n - dy;
-	vec3 ypos = n + dy;
-	float depth = length(vPc.xyz);
-	float curv = (cross(xneg, xpos).y - cross(yneg, ypos).x) / depth;
-	//at this stage 0.5 for flat, with valleys dark and ridges bright
-	curv = 1.0 - (curv + 0.5);
-	//clamp
-	curv =  min(max(curv, 0.0), 1.0);
-	// easing function
-	curv = pow(curv, 0.5);
-	//modulate ambient and diffuse with curvature
-	vec3 r = vec3(0.0, 0.0, 1.0); //rayDir: for orthographic projections moving in Z direction (no need for normal matrix)
-	float ambient = 0.6;
-	float diffuse = 0.6;
-	float specular = 0.2;
-	float shininess = 10.0;
-	vec3 lightPosition = vec3(0.0, 10.0, -2.0);
-	vec3 l = normalize(lightPosition);
-	float lightNormDot = dot(n, l);
-	vec3 a = vClr.rgb * ambient * curv;
-	vec3 d = max(lightNormDot, 0.0) * vClr.rgb * diffuse;
-	float s = specular * pow(max(dot(reflect(l, n), r), 0.0), shininess);
-	color = vec4(a + d + s, opacity);
-}`;
-var fragMeshShader = `#version 300 es
-precision highp int;
-precision highp float;
-uniform float opacity;
-in vec4 vClr;
-in vec3 vN;
-out vec4 color;
-void main() {
-	vec3 r = vec3(0.0, 0.0, 1.0); //rayDir: for orthographic projections moving in Z direction (no need for normal matrix)
-	float ambient = 0.35;
-	float diffuse = 0.5;
-	float specular = 0.2;
-	float shininess = 10.0;
-	vec3 n = normalize(vN);
-	vec3 lightPosition = vec3(0.0, 10.0, -5.0);
-	vec3 l = normalize(lightPosition);
-	float lightNormDot = dot(n, l);
-	vec3 a = vClr.rgb * ambient;
-	vec3 d = max(lightNormDot, 0.0) * vClr.rgb * diffuse;
-	float s = specular * pow(max(dot(reflect(l, n), r), 0.0), shininess);
-	color = vec4(a + d + s, opacity);
-}`;
-var fragMeshMatcapShader = `#version 300 es
-precision highp int;
-precision highp float;
-uniform float opacity;
-in vec4 vClr;
-in vec3 vN;
-uniform sampler2D matCap;
-out vec4 color;
-void main() {
-	vec3 n = normalize(vN);
-	vec2 uv = n.xy * 0.5 + 0.5;
-	uv.y = 1.0 - uv.y;
-	vec3 clr = texture(matCap,uv.xy).rgb * vClr.rgb;
-	color = vec4(clr, opacity);
-}`;
-var fragMeshMatteShader = `#version 300 es
-precision highp int;
-precision highp float;
-uniform float opacity;
-in vec4 vClr;
-in vec3 vN;
-out vec4 color;
-void main() {
-	float ambient = 0.35;
-	float diffuse = 0.6;
-	vec3 n = normalize(vN);
-	vec3 lightPosition = vec3(0.0, 10.0, -5.0);
-	vec3 l = normalize(lightPosition);
-	float lightNormDot = dot(n, l);
-	vec3 a = vClr.rgb * ambient;
-	vec3 d = max(lightNormDot, 0.0) * vClr.rgb * diffuse;
-	color = vec4(a + d, opacity);
-}`;
-var fragMeshHemiShader = `#version 300 es
-precision highp int;
-precision highp float;
-uniform float opacity;
-in vec4 vClr;
-in vec3 vN;
-out vec4 color;
-void main() {
-	vec3 r = vec3(0.0, 0.0, 1.0); //rayDir: for orthographic projections moving in Z direction (no need for normal matrix)
-	float ambient = 0.35;
-	float diffuse = 0.5;
-	float specular = 0.2;
-	float shininess = 10.0;
-	vec3 n = normalize(vN);
-	vec3 lightPosition = vec3(0.0, 10.0, -5.0);
-	vec3 l = normalize(lightPosition);
-	float lightNormDot = dot(n, l);
-	vec3 up = vec3(0.0, 1.0, 0.0);
-	float ax = dot(n, up) * 0.5 + 0.5;  //Shreiner et al. (2013) OpenGL Programming Guide, 8th Ed., p 388. ISBN-10: 0321773039
-	vec3 upClr = vec3(1.0, 1.0, 0.95);
-	vec3 downClr = vec3(0.4, 0.4, 0.6);
-	vec3 a = vClr.rgb * ambient;
-	a *= mix(downClr, upClr, ax);
-	vec3 d = max(lightNormDot, 0.0) * vClr.rgb * diffuse;
-	float s = specular * pow(max(dot(reflect(l, n), r), 0.0), shininess);
-	color = vec4(a + d + s, opacity);
-}`;
-var fragMeshShaderSHBlue = `#version 300 es
-precision highp int;
-precision highp float;
-uniform float opacity;
-in vec4 vClr;
-in vec3 vN;
-out vec4 color;
-//Spherical harmonics constants
-const float C1 = 0.429043;
-const float C2 = 0.511664;
-const float C3 = 0.743125;
-const float C4 = 0.886227;
-const float C5 = 0.247708;
-//Spherical harmonics coefficients
-// Ramamoorthi, R., and P. Hanrahan. 2001b. "An Efficient Representation for Irradiance Environment Maps." In Proceedings of SIGGRAPH 2001, pp. 497\u2013500.
-// https://github.com/eskimoblood/processingSketches/blob/master/data/shader/shinyvert.glsl
-// https://github.com/eskimoblood/processingSketches/blob/master/data/shader/shinyvert.glsl
-// Constants for Eucalyptus Grove lighting
-const vec3 L00  = vec3( 0.3783264,  0.4260425,  0.4504587);
-const vec3 L1m1 = vec3( 0.2887813,  0.3586803,  0.4147053);
-const vec3 L10  = vec3( 0.0379030,  0.0295216,  0.0098567);
-const vec3 L11  = vec3(-0.1033028, -0.1031690, -0.0884924);
-const vec3 L2m2 = vec3(-0.0621750, -0.0554432, -0.0396779);
-const vec3 L2m1 = vec3( 0.0077820, -0.0148312, -0.0471301);
-const vec3 L20  = vec3(-0.0935561, -0.1254260, -0.1525629);
-const vec3 L21  = vec3(-0.0572703, -0.0502192, -0.0363410);
-const vec3 L22  = vec3( 0.0203348, -0.0044201, -0.0452180);
-vec3 SH(vec3 vNormal) {
-	vNormal = vec3(vNormal.x,vNormal.z,vNormal.y);
-	vec3 diffuseColor = C1 * L22 * (vNormal.x * vNormal.x - vNormal.y * vNormal.y) +
-	C3 * L20 * vNormal.z * vNormal.z +
-	C4 * L00 -
-	C5 * L20 +
-	2.0 * C1 * L2m2 * vNormal.x * vNormal.y +
-	2.0 * C1 * L21  * vNormal.x * vNormal.z +
-	2.0 * C1 * L2m1 * vNormal.y * vNormal.z +
-	2.0 * C2 * L11  * vNormal.x +
-	2.0 * C2 * L1m1 * vNormal.y +
-	2.0 * C2 * L10  * vNormal.z;
-	return diffuseColor;
-}
-void main() {
-	vec3 r = vec3(0.0, 0.0, 1.0); //rayDir: for orthographic projections moving in Z direction (no need for normal matrix)
-	float ambient = 0.3;
-	float diffuse = 0.6;
-	float specular = 0.1;
-	float shininess = 10.0;
-	vec3 n = normalize(vN);
-	vec3 lightPosition = vec3(0.0, 10.0, -5.0);
-	vec3 l = normalize(lightPosition);
-	float s = specular * pow(max(dot(reflect(l, n), r), 0.0), shininess);
-	vec3 a = vClr.rgb * ambient;
-	vec3 d = vClr.rgb * diffuse * SH(-reflect(n, vec3(l.x, l.y, -l.z)) );
-	color = vec4(a + d + s, opacity);
-}`;
-var vertFlatMeshShader = `#version 300 es
-layout(location=0) in vec3 pos;
-layout(location=1) in vec4 norm;
-layout(location=2) in vec4 clr;
-uniform mat4 mvpMtx;
-//uniform mat4 modelMtx;
-uniform mat4 normMtx;
-out vec4 vClr;
-flat out vec3 vN;
-void main(void) {
-	gl_Position = mvpMtx * vec4(pos, 1.0);
-	vN = normalize((normMtx * vec4(norm.xyz,1.0)).xyz);
-	//vV = -vec3(modelMtx*vec4(pos,1.0));
-	vClr = clr;
-}`;
-var fragFlatMeshShader = `#version 300 es
-precision highp int;
-precision highp float;
-uniform float opacity;
-in vec4 vClr;
-flat in vec3 vN;
-out vec4 color;
-void main() {
-	vec3 r = vec3(0.0, 0.0, 1.0); //rayDir: for orthographic projections moving in Z direction (no need for normal matrix)
-	float ambient = 0.35;
-	float diffuse = 0.5;
-	float specular = 0.2;
-	float shininess = 10.0;
-	vec3 n = normalize(vN);
-	vec3 lightPosition = vec3(0.0, 10.0, -5.0);
-	vec3 l = normalize(lightPosition);
-	float lightNormDot = dot(n, l);
-	vec3 a = vClr.rgb * ambient;
-	vec3 d = max(lightNormDot, 0.0) * vClr.rgb * diffuse;
-	float s = specular * pow(max(dot(reflect(l, n), r), 0.0), shininess);
-	color = vec4(a + d + s, opacity);
-}`;
-var fragVolumePickingShader = `#version 300 es
-#line 1260
-//precision highp int;
-precision highp float;
-uniform vec3 rayDir;
-uniform vec3 volScale;
-uniform vec3 texVox;
-uniform vec4 clipPlane;
-uniform highp sampler3D volume, overlay;
-uniform float overlays;
-uniform float clipThick;
-uniform vec3 clipLo;
-uniform vec3 clipHi;
-uniform mat4 matRAS;
-uniform mat4 mvpMtx;
-uniform float drawOpacity, renderOverlayBlend;
-uniform highp sampler3D drawing;
-uniform highp sampler2D colormap;
-uniform int backgroundMasksOverlays;
-in vec3 vColor;
-out vec4 fColor;
-` + kRenderFunc + `
-void main() {
-	int id = 254;
-	vec3 start = vColor;
-	gl_FragDepth = 0.0;
-	fColor = vec4(0.0, 0.0, 0.0, 0.0); //assume no hit: ID = 0
-	float fid = float(id & 255)/ 255.0;
-	vec3 backPosition = GetBackPosition(start);
-	vec3 dir = normalize(backPosition - start);
-	clipVolumeStart(start, backPosition);
-	float len = length(backPosition - start);
-	float lenVox = length((texVox * start) - (texVox * backPosition));
-	if ((lenVox < 0.5) || (len > 3.0)) return;//discard; //length limit for parallel rays
-	float sliceSize = len / lenVox; //e.g. if ray length is 1.0 and traverses 50 voxels, each voxel is 0.02 in unit cube
-	float stepSize = sliceSize; //quality: larger step is faster traversal, but fewer samples
-	float opacityCorrection = stepSize/sliceSize;
-	dir = normalize(dir);
-	vec4 samplePos = vec4(start.xyz, 0.0); //ray position
-	float lenNoClip = len;
-	bool isClip = false;
-	vec4 clipPos = applyClip(dir, samplePos, len, isClip);
-	if (isClip) fColor = vec4(samplePos.xyz, 253.0 / 255.0); //assume no hit: ID = 0
-	//start: OPTIONAL fast pass: rapid traversal until first hit
-	float stepSizeFast = sliceSize * 1.9;
-	vec4 deltaDirFast = vec4(dir.xyz * stepSizeFast, stepSizeFast);
-	while (samplePos.a <= len) {
-		float val = texture(volume, samplePos.xyz).a;
-		if (val > 0.01) {
-			fColor = vec4(samplePos.rgb, fid);
-			gl_FragDepth = frac2ndc(samplePos.xyz);
-			break;
-		}
-		samplePos += deltaDirFast; //advance ray position
-	}
-	//end: fast pass
-	if ((overlays < 1.0) || (backgroundMasksOverlays > 0)) {
-		return; //background hit, no overlays
-	}
-	//overlay pass
-	len = min(lenNoClip, samplePos.a); //only find overlay closer than background
-	samplePos = vec4(start.xyz, 0.0); //ray position
-	while (samplePos.a <= len) {
-		float val = texture(overlay, samplePos.xyz).a;
-		if (val > 0.01) {
-			fColor = vec4(samplePos.rgb, fid);
-			gl_FragDepth = frac2ndc(samplePos.xyz);
-			return;
-		}
-		samplePos += deltaDirFast; //advance ray position
-	}
-	//if (fColor.a == 0.0) discard; //no hit in either background or overlays
-	//you only get here if there is a hit with the background that is closer than any overlay
-}`;
-var vertOrientCubeShader = `#version 300 es
-// an attribute is an input (in) to a vertex shader.
-// It will receive data from a buffer
-layout(location=0)  in vec3 a_position;
-layout(location=1)  in vec3 a_color;
-// A matrix to transform the positions by
-uniform mat4 u_matrix;
-out vec3 vColor;
-// all shaders have a main function
-void main() {
-	// Multiply the position by the matrix.
-	vec4 pos = vec4(a_position, 1.0);
-	gl_Position = u_matrix * vec4(pos);
-	vColor = a_color;
-}
-`;
-var fragOrientCubeShader = `#version 300 es
-precision highp float;
-uniform vec4 u_color;
-in vec3 vColor;
-out vec4 outColor;
-void main() {
-	outColor = vec4(vColor, 1.0);
-}`;
-var vertPassThroughShader = `#version 300 es
-#line 1359
-precision highp int;
-precision highp float;
-in vec3 vPos;
-out vec2 TexCoord;
-void main() {
-	TexCoord = vPos.xy;
-	vec2 viewCoord = (vPos.xy - 0.5) * 2.0;
-	gl_Position = vec4((vPos.xy - 0.5) * 2.0, 0.0, 1.0);
-}`;
-var fragPassThroughShader = `#version 300 es
-precision highp int;
-precision highp float;
-in vec2 TexCoord;
-out vec4 FragColor;
-uniform float coordZ;
-uniform lowp sampler3D in3D;
-void main(void) {
- FragColor = texture(in3D, vec3(TexCoord.xy, coordZ));
-}`;
-var blurVertShader = `#version 300 es
-#line 286
-precision highp int;
-precision highp float;
-in vec3 vPos;
-out vec2 TexCoord;
-void main() {
-    TexCoord = vPos.xy;
-    gl_Position = vec4( (vPos.xy-vec2(0.5,0.5))* 2.0, 0.0, 1.0);
-}`;
-var blurFragShader = `#version 300 es
-#line 298
-precision highp int;
-precision highp float;
-in vec2 TexCoord;
-out vec4 FragColor;
-uniform float coordZ;
-uniform float dX;
-uniform float dY;
-uniform float dZ;
-uniform highp sampler3D intensityVol;
-void main(void) {
- vec3 vx = vec3(TexCoord.xy, coordZ);
- vec4 samp = texture(intensityVol,vx+vec3(+dX,+dY,+dZ));
- samp += texture(intensityVol,vx+vec3(+dX,+dY,-dZ));
- samp += texture(intensityVol,vx+vec3(+dX,-dY,+dZ));
- samp += texture(intensityVol,vx+vec3(+dX,-dY,-dZ));
- samp += texture(intensityVol,vx+vec3(-dX,+dY,+dZ));
- samp += texture(intensityVol,vx+vec3(-dX,+dY,-dZ));
- samp += texture(intensityVol,vx+vec3(-dX,-dY,+dZ));
- samp += texture(intensityVol,vx+vec3(-dX,-dY,-dZ));
- FragColor = samp*0.125;
-}`;
-var sobelBlurFragShader = `#version 300 es
-#line 298
-precision highp int;
-precision highp float;
-in vec2 TexCoord;
-out vec4 FragColor;
-uniform float coordZ;
-uniform float dX;
-uniform float dY;
-uniform float dZ;
-uniform highp sampler3D intensityVol;
-void main(void) {
- vec3 vx = vec3(TexCoord.xy, coordZ);
- vec4 XYZ = texture(intensityVol,vx+vec3(+dX,+dY,+dZ));
- vec4 OYZ = texture(intensityVol,vx+vec3(0.0,+dY,+dZ));
- vec4 xYZ = texture(intensityVol,vx+vec3(-dX,+dY,+dZ));
- vec4 XOZ = texture(intensityVol,vx+vec3(+dX,0.0,+dZ));
- vec4 OOZ = texture(intensityVol,vx+vec3(0.0,0.0,+dZ));
- vec4 xOZ = texture(intensityVol,vx+vec3(-dX,0.0,+dZ));
- vec4 XyZ = texture(intensityVol,vx+vec3(+dX,-dY,+dZ));
- vec4 OyZ = texture(intensityVol,vx+vec3(0.0,-dY,+dZ));
- vec4 xyZ = texture(intensityVol,vx+vec3(-dX,-dY,+dZ));
-
- vec4 XYO = texture(intensityVol,vx+vec3(+dX,+dY,0.0));
- vec4 OYO = texture(intensityVol,vx+vec3(0.0,+dY,0.0));
- vec4 xYO = texture(intensityVol,vx+vec3(-dX,+dY,0.0));
- vec4 XOO = texture(intensityVol,vx+vec3(+dX,0.0,0.0));
- vec4 OOO = texture(intensityVol,vx+vec3(0.0,0.0,0.0));
- vec4 xOO = texture(intensityVol,vx+vec3(-dX,0.0,0.0));
- vec4 XyO = texture(intensityVol,vx+vec3(+dX,-dY,0.0));
- vec4 OyO = texture(intensityVol,vx+vec3(0.0,-dY,0.0));
- vec4 xyO = texture(intensityVol,vx+vec3(-dX,-dY,0.0));
-
- vec4 XYz = texture(intensityVol,vx+vec3(+dX,+dY,-dZ));
- vec4 OYz = texture(intensityVol,vx+vec3(0.0,+dY,-dZ));
- vec4 xYz = texture(intensityVol,vx+vec3(-dX,+dY,-dZ));
- vec4 XOz = texture(intensityVol,vx+vec3(+dX,0.0,-dZ));
- vec4 OOz = texture(intensityVol,vx+vec3(0.0,0.0,-dZ));
- vec4 xOz = texture(intensityVol,vx+vec3(-dX,0.0,-dZ));
- vec4 Xyz = texture(intensityVol,vx+vec3(+dX,-dY,-dZ));
- vec4 Oyz = texture(intensityVol,vx+vec3(0.0,-dY,-dZ));
- vec4 xyz = texture(intensityVol,vx+vec3(-dX,-dY,-dZ));
-
- vec4 blurred = vec4 (0.0, 0.0, 0.0, 0.0);
- blurred.r = 2.0*(xOz.r +xOZ.r +xyO.r +xYO.r +xOO.r +XOz.r +XOZ.r +XyO.r +XYO.r +XOO.r) +xyz.r +xyZ.r +xYz.r +xYZ.r +Xyz.r +XyZ.r +XYz.r +XYZ.r;
- blurred.g = 2.0*(Oyz.r +OyZ.r +xyO.r +XyO.r +OyO.r +OYz.r +OYZ.r +xYO.r +XYO.r +OYO.r) +xyz.r +Xyz.r +xyZ.r +XyZ.r +xYz.r +XYz.r +xYZ.r +XYZ.r;
- blurred.b = 2.0*(Oyz.r +OYz.r +xOz.r +XOz.r +OOz.r +OyZ.r +OYZ.r +xOZ.r +XOZ.r +OOZ.r) +xyz.r +Xyz.r +xYz.r +XYz.r +xyZ.r +XyZ.r +XyZ.r +XYZ.r;
- blurred.a = 0.32*(abs(blurred.r)+abs(blurred.g)+abs(blurred.b));
- // 0.0357 = 1/28 to account for weights, rescale to 2**16,
- FragColor = 0.0357*blurred;
-}`;
-var kGradientMagnitude = `
-  gradientSample.a = log2(gradientSample.r*gradientSample.r + gradientSample.g*gradientSample.g + gradientSample.b*gradientSample.b + 1.922337562475971e-06) + 18.988706873717717;
-`;
-var sobelFirstOrderFragShader = `#version 300 es
-#line 323
-precision highp int;
-precision highp float;
-in vec2 TexCoord;
-out vec4 FragColor;
-uniform float coordZ;
-uniform float dX;
-uniform float dY;
-uniform float dZ;
-uniform highp sampler3D intensityVol;
-void main(void) {
-  vec3 vx = vec3(TexCoord.xy, coordZ);
-  //Neighboring voxels 'T'op/'B'ottom, 'A'nterior/'P'osterior, 'R'ight/'L'eft
-  float TAR = texture(intensityVol,vx+vec3(+dX,+dY,+dZ)).r;
-  float TAL = texture(intensityVol,vx+vec3(+dX,+dY,-dZ)).r;
-  float TPR = texture(intensityVol,vx+vec3(+dX,-dY,+dZ)).r;
-  float TPL = texture(intensityVol,vx+vec3(+dX,-dY,-dZ)).r;
-  float BAR = texture(intensityVol,vx+vec3(-dX,+dY,+dZ)).r;
-  float BAL = texture(intensityVol,vx+vec3(-dX,+dY,-dZ)).r;
-  float BPR = texture(intensityVol,vx+vec3(-dX,-dY,+dZ)).r;
-  float BPL = texture(intensityVol,vx+vec3(-dX,-dY,-dZ)).r;
-  vec4 gradientSample = vec4 (0.0, 0.0, 0.0, 0.0);
-  gradientSample.r = BAR+BAL+BPR+BPL -TAR-TAL-TPR-TPL;
-  gradientSample.g = TPR+TPL+BPR+BPL -TAR-TAL-BAR-BAL;
-  gradientSample.b = TAL+TPL+BAL+BPL -TAR-TPR-BAR-BPR;
-${kGradientMagnitude}
-	// 0.04242020977371934 = 1/(log2(3*8) - log2(1/(255**2*8))) // 3*8 -> max for 1st order gradient
-	gradientSample.a *= 0.04242020977371934;
-  gradientSample.rgb = normalize(gradientSample.rgb);
-  gradientSample.rgb = (gradientSample.rgb * 0.5)+0.5;
-  FragColor = gradientSample;
-}`;
-var sobelSecondOrderFragShader = `#version 300 es
-#line 323
-precision highp int;
-precision highp float;
-in vec2 TexCoord;
-out vec4 FragColor;
-uniform float coordZ;
-uniform float dX;
-uniform float dY;
-uniform float dZ;
-uniform float dX2;
-uniform float dY2;
-uniform float dZ2;
-uniform highp sampler3D intensityVol;
-void main(void) {
-  vec3 vx = vec3(TexCoord.xy, coordZ);
-  //Neighboring voxels 'T'op/'B'ottom, 'A'nterior/'P'osterior, 'R'ight/'L'eft
-  vec4 TAR = texture(intensityVol,vx+vec3(+dX,+dY,+dZ));
-  vec4 TAL = texture(intensityVol,vx+vec3(+dX,+dY,-dZ));
-  vec4 TPR = texture(intensityVol,vx+vec3(+dX,-dY,+dZ));
-  vec4 TPL = texture(intensityVol,vx+vec3(+dX,-dY,-dZ));
-  vec4 BAR = texture(intensityVol,vx+vec3(-dX,+dY,+dZ));
-  vec4 BAL = texture(intensityVol,vx+vec3(-dX,+dY,-dZ));
-  vec4 BPR = texture(intensityVol,vx+vec3(-dX,-dY,+dZ));
-  vec4 BPL = texture(intensityVol,vx+vec3(-dX,-dY,-dZ));
-  vec4 T = texture(intensityVol,vx+vec3(+dX2,0.0,0.0));
-  vec4 A = texture(intensityVol,vx+vec3(0.0,+dY2,0.0));
-  vec4 R = texture(intensityVol,vx+vec3(0.0,0.0,+dZ2));
-  vec4 B = texture(intensityVol,vx+vec3(-dX2,0.0,0.0));
-  vec4 P = texture(intensityVol,vx+vec3(0.0,-dY2,0.0));
-  vec4 L = texture(intensityVol,vx+vec3(0.0,0.0,-dZ2));
-  vec4 gradientSample = vec4 (0.0, 0.0, 0.0, 0.0);
-  gradientSample.r = -4.0*B.r +8.0*(BAR.r+BAL.r+BPR.r+BPL.r) -8.0*(TAR.r+TAL.r+TPR.r+TPL.r) +4.0*T.r;
-  gradientSample.g = -4.0*P.g +8.0*(TPR.g+TPL.g+BPR.g+BPL.g) -8.0*(TAR.g+TAL.g+BAR.g+BAL.g) +4.0*A.g;
-  gradientSample.b = -4.0*L.b +8.0*(TAL.b+TPL.b+BAL.b+BPL.b) -8.0*(TAR.b+TPR.b+BAR.b+BPR.b) +4.0*R.b;
-${kGradientMagnitude}
-	gradientSample.a *= 0.0325;
-  gradientSample.rgb = normalize(gradientSample.rgb);
-  gradientSample.rgb =  (gradientSample.rgb * 0.5)+0.5;
-  FragColor = gradientSample;
-}`;
 
 // src/orientCube.ts
 var orientCube = new Float32Array([
@@ -9004,7 +6825,65 @@ function v4() {
   return out;
 }
 
-// src/cmaps/index.js
+// src/logger.ts
+var _Log = class _Log {
+  constructor({ name = "niivue", level = "info" } = {}) {
+    __publicField(this, "level");
+    __publicField(this, "name");
+    this.name = `${name}`;
+    this.level = level;
+  }
+  debug(...args) {
+    if (_Log.levels[this.level] > _Log.levels.debug) {
+      return;
+    }
+    console.debug(`${this.name}-debug`, ...args);
+  }
+  info(...args) {
+    if (_Log.levels[this.level] > _Log.levels.info) {
+      return;
+    }
+    console.info(`${this.name}-info`, ...args);
+  }
+  warn(...args) {
+    if (_Log.levels[this.level] > _Log.levels.warn) {
+      return;
+    }
+    console.warn(`${this.name}-warn`, ...args);
+  }
+  error(...args) {
+    if (_Log.levels[this.level] > _Log.levels.error) {
+      return;
+    }
+    console.error(`${this.name}-error`, ...args);
+  }
+  fatal(...args) {
+    if (_Log.levels[this.level] > _Log.levels.fatal) {
+      return;
+    }
+    console.error(`${this.name}-fatal`, ...args);
+  }
+  setLogLevel(level) {
+    this.level = level;
+  }
+  setName(name) {
+    this.name = name;
+  }
+};
+// map 'debug' 'info' 'warn' 'error' 'fatal' 'silent' to numbers
+// for comparison
+__publicField(_Log, "levels", {
+  debug: 0,
+  info: 1,
+  warn: 2,
+  error: 3,
+  fatal: 4,
+  silent: Infinity
+});
+var Log = _Log;
+var log = new Log({ name: "niivue", level: "info" });
+
+// src/cmaps/index.ts
 var cmaps_exports = {};
 __export(cmaps_exports, {
   $itksnap: () => itksnap_default,
@@ -25663,7 +23542,7 @@ async function saveToDisk(nvImage, fnm = "", drawing8 = null) {
 }
 
 // src/nvimage/VolumeUtils.ts
-function getValue(nvImage, x, y, z, frame4D = 0, isReadImaginary = false) {
+function getValues(nvImage, x, y, z, frame4D = 0, isReadImaginary = false) {
   if (!nvImage.hdr) {
     throw new Error("getValue: NVImage header is not defined.");
   }
@@ -25672,7 +23551,7 @@ function getValue(nvImage, x, y, z, frame4D = 0, isReadImaginary = false) {
   }
   if (isReadImaginary && !nvImage.imaginary) {
     log.warn("getValue: Attempted to read imaginary data, but none exists.");
-    return 0;
+    return [0];
   }
   const nx = nvImage.hdr.dims[1];
   const ny = nvImage.hdr.dims[2];
@@ -25692,42 +23571,45 @@ function getValue(nvImage, x, y, z, frame4D = 0, isReadImaginary = false) {
   let vx = x + y * nx + z * nx * ny;
   if (nvImage.hdr.datatypeCode === 2304 /* DT_RGBA32 */) {
     if (!nvImage.img) {
-      return 0;
+      return [0];
     }
     vx *= 4;
-    if (vx + 2 >= nvImage.img.length) {
+    if (vx + 3 >= nvImage.img.length) {
       log.warn(`getValue: Calculated index ${vx} out of bounds for RGBA data.`);
-      return 0;
+      return [0];
     }
-    if (nvImage.hdr.intent_code === 1002) {
-      return nvImage.img[vx];
-    }
-    const lum = nvImage.img[vx] * 0.2126 + nvImage.img[vx + 1] * 0.7152 + nvImage.img[vx + 2] * 0.0722;
-    return Math.round(lum);
+    return [nvImage.img[vx], nvImage.img[vx + 1], nvImage.img[vx + 2], nvImage.img[vx + 3]];
   }
   if (nvImage.hdr.datatypeCode === 128 /* DT_RGB24 */) {
     if (!nvImage.img) {
-      return 0;
+      return [0];
     }
     vx *= 3;
     if (vx + 2 >= nvImage.img.length) {
       log.warn(`getValue: Calculated index ${vx} out of bounds for RGB data.`);
-      return 0;
+      return [0];
     }
-    const lum = nvImage.img[vx] * 0.2126 + nvImage.img[vx + 1] * 0.7152 + nvImage.img[vx + 2] * 0.0722;
-    return Math.round(lum);
+    return [nvImage.img[vx], nvImage.img[vx + 1], nvImage.img[vx + 2]];
   }
   const nVox3D = nx * ny * nz;
   const volOffset = frame4D * nVox3D;
   const finalVxIndex = vx + volOffset;
   const dataArray = isReadImaginary ? nvImage.imaginary : nvImage.img;
   if (finalVxIndex < 0 || finalVxIndex >= dataArray.length) {
-    return 0;
+    return [0];
   }
   const rawValue = dataArray[finalVxIndex];
   const slope = isNaN(nvImage.hdr.scl_slope) || nvImage.hdr.scl_slope === 0 ? 1 : nvImage.hdr.scl_slope;
   const inter = isNaN(nvImage.hdr.scl_inter) ? 0 : nvImage.hdr.scl_inter;
-  return slope * rawValue + inter;
+  return [slope * rawValue + inter];
+}
+function getValue(nvImage, x, y, z, frame4D = 0, isReadImaginary = false) {
+  const vals = getValues(nvImage, x, y, z, frame4D, isReadImaginary);
+  if (vals.length < 3) {
+    return vals[0];
+  }
+  const lum = vals[0] * 0.2126 + vals[1] * 0.7152 + vals[2] * 0.0722;
+  return lum;
 }
 function getVolumeData(nvImage, voxStartRAS = [-1, 0, 0], voxEndRAS = [0, 0, 0], dataType = "same") {
   const defaultResult = [new Uint8Array(), [0, 0, 0]];
@@ -28929,6 +26811,9 @@ var NVImage = class _NVImage {
     nZero += nNan;
     const n2pct = Math.round((nVox3D - 0 - nZero) * this.percentileFrac);
     if (n2pct < 1 || mn === mx) {
+      if (isBorder) {
+        return this.calMinMax(vol, false);
+      }
       log.debug("no variability in image intensity?");
       this.cal_min = mnScale;
       this.cal_max = mxScale;
@@ -29794,6 +27679,13 @@ var NVImage = class _NVImage {
     return getValue(this, x, y, z, frame4D, isReadImaginary);
   }
   /**
+   * Returns voxel intensities at specific native coordinates.
+   * Delegates to VolumeUtils.getValue.
+   */
+  getValues(x, y, z, frame4D = 0, isReadImaginary = false) {
+    return getValues(this, x, y, z, frame4D, isReadImaginary);
+  }
+  /**
    * Update options for image
    */
   applyOptionsUpdate(options) {
@@ -29913,6 +27805,12 @@ var SLICE_TYPE = /* @__PURE__ */ ((SLICE_TYPE2) => {
   SLICE_TYPE2[SLICE_TYPE2["RENDER"] = 4] = "RENDER";
   return SLICE_TYPE2;
 })(SLICE_TYPE || {});
+var PEN_TYPE = /* @__PURE__ */ ((PEN_TYPE2) => {
+  PEN_TYPE2[PEN_TYPE2["PEN"] = 0] = "PEN";
+  PEN_TYPE2[PEN_TYPE2["RECTANGLE"] = 1] = "RECTANGLE";
+  PEN_TYPE2[PEN_TYPE2["ELLIPSE"] = 2] = "ELLIPSE";
+  return PEN_TYPE2;
+})(PEN_TYPE || {});
 var SHOW_RENDER = /* @__PURE__ */ ((SHOW_RENDER2) => {
   SHOW_RENDER2[SHOW_RENDER2["NEVER"] = 0] = "NEVER";
   SHOW_RENDER2[SHOW_RENDER2["ALWAYS"] = 1] = "ALWAYS";
@@ -29935,24 +27833,10 @@ var DRAG_MODE = /* @__PURE__ */ ((DRAG_MODE2) => {
   DRAG_MODE2[DRAG_MODE2["callbackOnly"] = 5] = "callbackOnly";
   DRAG_MODE2[DRAG_MODE2["roiSelection"] = 6] = "roiSelection";
   DRAG_MODE2[DRAG_MODE2["angle"] = 7] = "angle";
+  DRAG_MODE2[DRAG_MODE2["crosshair"] = 8] = "crosshair";
+  DRAG_MODE2[DRAG_MODE2["windowing"] = 9] = "windowing";
   return DRAG_MODE2;
 })(DRAG_MODE || {});
-var DRAG_MODE_SECONDARY = /* @__PURE__ */ ((DRAG_MODE_SECONDARY2) => {
-  DRAG_MODE_SECONDARY2[DRAG_MODE_SECONDARY2["none"] = 0] = "none";
-  DRAG_MODE_SECONDARY2[DRAG_MODE_SECONDARY2["contrast"] = 1] = "contrast";
-  DRAG_MODE_SECONDARY2[DRAG_MODE_SECONDARY2["measurement"] = 2] = "measurement";
-  DRAG_MODE_SECONDARY2[DRAG_MODE_SECONDARY2["pan"] = 3] = "pan";
-  DRAG_MODE_SECONDARY2[DRAG_MODE_SECONDARY2["slicer3D"] = 4] = "slicer3D";
-  DRAG_MODE_SECONDARY2[DRAG_MODE_SECONDARY2["callbackOnly"] = 5] = "callbackOnly";
-  DRAG_MODE_SECONDARY2[DRAG_MODE_SECONDARY2["roiSelection"] = 6] = "roiSelection";
-  DRAG_MODE_SECONDARY2[DRAG_MODE_SECONDARY2["angle"] = 7] = "angle";
-  return DRAG_MODE_SECONDARY2;
-})(DRAG_MODE_SECONDARY || {});
-var DRAG_MODE_PRIMARY = /* @__PURE__ */ ((DRAG_MODE_PRIMARY2) => {
-  DRAG_MODE_PRIMARY2[DRAG_MODE_PRIMARY2["crosshair"] = 0] = "crosshair";
-  DRAG_MODE_PRIMARY2[DRAG_MODE_PRIMARY2["windowing"] = 1] = "windowing";
-  return DRAG_MODE_PRIMARY2;
-})(DRAG_MODE_PRIMARY || {});
 var COLORMAP_TYPE = /* @__PURE__ */ ((COLORMAP_TYPE2) => {
   COLORMAP_TYPE2[COLORMAP_TYPE2["MIN_TO_MAX"] = 0] = "MIN_TO_MAX";
   COLORMAP_TYPE2[COLORMAP_TYPE2["ZERO_TO_MAX_TRANSPARENT_BELOW_MIN"] = 1] = "ZERO_TO_MAX_TRANSPARENT_BELOW_MIN";
@@ -29978,6 +27862,8 @@ var DEFAULT_OPTIONS = {
   fontColor: [0.5, 0.5, 0.5, 1],
   selectionBoxColor: [1, 1, 1, 0.5],
   clipPlaneColor: [0.7, 0, 0.7, 0.5],
+  paqdUniforms: [0.3, 0.5, 0.5, 1],
+  // paqdUniforms: [0.3, 0.9, 1.0, 0.5],
   clipThick: 2,
   clipVolumeLow: [0, 0, 0],
   clipVolumeHigh: [1, 1, 1],
@@ -30006,11 +27892,14 @@ var DEFAULT_OPTIONS = {
   isRadiologicalConvention: false,
   meshThicknessOn2D: Infinity,
   dragMode: 1 /* contrast */,
-  dragModePrimary: 0 /* crosshair */,
+  dragModePrimary: 8 /* crosshair */,
+  mouseEventConfig: void 0,
+  touchEventConfig: void 0,
   yoke3Dto2DZoom: false,
   isDepthPickMesh: false,
   isCornerOrientationText: false,
   isOrientationTextVisible: true,
+  showAllOrientationMarkers: false,
   heroImageFraction: 0,
   heroSliceType: 4 /* RENDER */,
   sagittalNoseLeft: false,
@@ -30023,6 +27912,7 @@ var DEFAULT_OPTIONS = {
   dragAndDropEnabled: true,
   drawingEnabled: false,
   penValue: 1,
+  penType: 0 /* PEN */,
   floodFillNeighbors: 6,
   isFilledPen: false,
   thumbnail: "",
@@ -30079,7 +27969,11 @@ var DEFAULT_OPTIONS = {
   renderSilhouette: 0,
   gradientAmount: 0,
   invertScrollDirection: false,
-  is2DSliceShader: false
+  is2DSliceShader: false,
+  bounds: null,
+  showBoundsBorder: false,
+  boundsBorderColor: [1, 1, 1, 1]
+  // white border by default
 };
 var INITIAL_SCENE_DATA = {
   gamma: 1,
@@ -30125,6 +28019,8 @@ var NVDocument = class _NVDocument {
     __publicField(this, "drawBitmap", null);
     __publicField(this, "imageOptionsMap", /* @__PURE__ */ new Map());
     __publicField(this, "meshOptionsMap", /* @__PURE__ */ new Map());
+    __publicField(this, "completedMeasurements", []);
+    __publicField(this, "completedAngles", []);
     __publicField(this, "_optsProxy", null);
     __publicField(this, "_optsChangeCallback", null);
     this.scene = {
@@ -30367,8 +28263,9 @@ var NVDocument = class _NVDocument {
    *
    * @param embedImages  If false, encodedImageBlobs is left empty
    *                     (imageOptionsArray still records the URL / name).
+   * @param embedDrawing  If false, encodedDrawingBlob is left empty
    */
-  json(embedImages = true) {
+  json(embedImages = true, embedDrawing = true) {
     const data = {
       encodedImageBlobs: [],
       previewImageDataURL: this.data.previewImageDataURL,
@@ -30388,35 +28285,36 @@ var NVDocument = class _NVDocument {
       delete label.onClick;
     }
     data.customData = this.customData;
+    data.completedMeasurements = [...this.completedMeasurements];
+    data.completedAngles = [...this.completedAngles];
     if (this.volumes.length) {
       for (let i = 0; i < this.volumes.length; i++) {
         const volume = this.volumes[i];
         let imageOptions = this.getImageOptions(volume);
         if (imageOptions === null) {
-          log.warn("no options found for image, using default");
+          log.warn("no options found for image, using options from the volume directly");
           imageOptions = {
-            name: "",
-            colormap: "gray",
-            opacity: 1,
+            name: volume?.name ?? "",
+            colormap: volume?._colormap ?? "gray",
+            opacity: volume?._opacity ?? 1,
             pairedImgData: null,
-            cal_min: NaN,
-            cal_max: NaN,
-            trustCalMinMax: true,
-            percentileFrac: 0.02,
-            ignoreZeroVoxels: false,
-            useQFormNotSForm: false,
-            colormapNegative: "",
-            colormapLabel: null,
-            imageType: NVIMAGE_TYPE.NII,
-            frame4D: 0,
-            limitFrames4D: NaN,
-            // TODO the following were missing
-            url: "",
-            urlImageData: "",
+            cal_min: volume?.cal_min ?? NaN,
+            cal_max: volume?.cal_max ?? NaN,
+            trustCalMinMax: volume?.trustCalMinMax ?? true,
+            percentileFrac: volume?.percentileFrac ?? 0.02,
+            ignoreZeroVoxels: volume?.ignoreZeroVoxels ?? false,
+            useQFormNotSForm: volume?.useQFormNotSForm ?? false,
+            colormapNegative: volume?.colormapNegative ?? "",
+            colormapLabel: volume?.colormapLabel ?? null,
+            imageType: volume?.imageType ?? NVIMAGE_TYPE.NII,
+            frame4D: volume?.frame4D ?? 0,
+            limitFrames4D: volume?.limitFrames4D ?? NaN,
+            url: volume?.url ?? "",
+            urlImageData: volume?.urlImgData ?? "",
             alphaThreshold: false,
-            cal_minNeg: NaN,
-            cal_maxNeg: NaN,
-            colorbarVisible: true
+            cal_minNeg: volume?.cal_minNeg ?? NaN,
+            cal_maxNeg: volume?.cal_maxNeg ?? NaN,
+            colorbarVisible: volume?.colorbarVisible ?? true
           };
         } else {
           if (!("imageType" in imageOptions)) {
@@ -30426,8 +28324,8 @@ var NVDocument = class _NVDocument {
         imageOptions.colormap = volume.colormap;
         imageOptions.colormapLabel = volume.colormapLabel;
         imageOptions.opacity = volume.opacity;
-        imageOptions.cal_max = volume.cal_max || NaN;
-        imageOptions.cal_min = volume.cal_min || NaN;
+        imageOptions.cal_max = volume.cal_max ?? NaN;
+        imageOptions.cal_min = volume.cal_min ?? NaN;
         imageOptionsArray.push(imageOptions);
         if (embedImages) {
           const blob = NVUtilities.uint8tob64(volume.toUint8Array());
@@ -30499,7 +28397,7 @@ var NVDocument = class _NVDocument {
       meshes.push(copyMesh);
     }
     data.meshesString = JSON.stringify(serialize(meshes));
-    if (this.drawBitmap) {
+    if (embedDrawing && this.drawBitmap) {
       data.encodedDrawingBlob = NVUtilities.uint8tob64(this.drawBitmap);
     }
     return data;
@@ -30608,6 +28506,26 @@ var NVDocument = class _NVDocument {
       ...INITIAL_SCENE_DATA,
       ...data.sceneData || {}
     };
+    if (data.completedMeasurements) {
+      document2.completedMeasurements = data.completedMeasurements.map((m) => ({
+        ...m,
+        startMM: vec3_exports.clone(m.startMM),
+        endMM: vec3_exports.clone(m.endMM)
+      }));
+    }
+    if (data.completedAngles) {
+      document2.completedAngles = data.completedAngles.map((a) => ({
+        ...a,
+        firstLineMM: {
+          start: vec3_exports.clone(a.firstLineMM.start),
+          end: vec3_exports.clone(a.firstLineMM.end)
+        },
+        secondLineMM: {
+          start: vec3_exports.clone(a.secondLineMM.start),
+          end: vec3_exports.clone(a.secondLineMM.end)
+        }
+      }));
+    }
     if (document2.data.meshesString) {
       _NVDocument.deserializeMeshDataObjects(document2);
     }
@@ -34451,7 +32369,2645 @@ function toNiivueObject3D(nvImage, id, gl) {
   return obj3D;
 }
 
-// src/niivue/utils.ts
+// src/drawing/rle.ts
+function encodeRLE(data) {
+  const dl = data.length;
+  let dp = 0;
+  const r = new Uint8Array(dl + Math.ceil(0.01 * dl));
+  const rI = new Int8Array(r.buffer);
+  let rp = 0;
+  while (dp < dl) {
+    let v = data[dp];
+    dp++;
+    let rl = 1;
+    while (rl < 129 && dp < dl && data[dp] === v) {
+      dp++;
+      rl++;
+    }
+    if (rl > 1) {
+      rI[rp] = -rl + 1;
+      rp++;
+      r[rp] = v;
+      rp++;
+      continue;
+    }
+    while (dp < dl) {
+      if (rl > 127) {
+        break;
+      }
+      if (dp + 2 < dl) {
+        if (v !== data[dp] && data[dp + 2] === data[dp] && data[dp + 1] === data[dp]) {
+          break;
+        }
+      }
+      v = data[dp];
+      dp++;
+      rl++;
+    }
+    r[rp] = rl - 1;
+    rp++;
+    for (let i = 0; i < rl; i++) {
+      r[rp] = data[dp - rl + i];
+      rp++;
+    }
+  }
+  log.debug("PackBits " + dl + " -> " + rp + " bytes (x" + dl / rp + ")");
+  return r.slice(0, rp);
+}
+function decodeRLE(rle, decodedlen) {
+  const r = new Uint8Array(rle.buffer);
+  const rI = new Int8Array(r.buffer);
+  let rp = 0;
+  const d = new Uint8Array(decodedlen);
+  let dp = 0;
+  while (rp < r.length) {
+    const hdr = rI[rp];
+    rp++;
+    if (hdr < 0) {
+      const v = rI[rp];
+      rp++;
+      for (let i = 0; i < 1 - hdr; i++) {
+        d[dp] = v;
+        dp++;
+      }
+    } else {
+      for (let i = 0; i < hdr + 1; i++) {
+        d[dp] = rI[rp];
+        rp++;
+        dp++;
+      }
+    }
+  }
+  return d;
+}
+
+// src/drawing/undo.ts
+var drawUndo = ({
+  drawUndoBitmaps,
+  currentDrawUndoBitmap,
+  drawBitmap
+}) => {
+  const len4 = drawUndoBitmaps.length;
+  if (len4 < 1) {
+    log.debug("undo bitmaps not loaded");
+    return;
+  }
+  currentDrawUndoBitmap--;
+  if (currentDrawUndoBitmap < 0) {
+    currentDrawUndoBitmap = len4 - 1;
+  }
+  if (currentDrawUndoBitmap >= len4) {
+    currentDrawUndoBitmap = 0;
+  }
+  if (drawUndoBitmaps[currentDrawUndoBitmap].length < 2) {
+    log.debug("drawUndo is misbehaving");
+    return;
+  }
+  drawBitmap = decodeRLE(drawUndoBitmaps[currentDrawUndoBitmap], drawBitmap.length);
+  return { drawBitmap, currentDrawUndoBitmap };
+};
+
+// src/drawing/masks.ts
+function findBoundarySlices(sliceType, drawBitmap, dims) {
+  const { dimX, dimY, dimZ } = dims;
+  let axisSize;
+  if (sliceType === 0 /* AXIAL */) {
+    axisSize = dimZ;
+  } else if (sliceType === 1 /* CORONAL */) {
+    axisSize = dimY;
+  } else if (sliceType === 2 /* SAGITTAL */) {
+    axisSize = dimX;
+  } else {
+    return null;
+  }
+  let firstSliceWithData = -1;
+  let lastSliceWithData = -1;
+  for (let slice2 = 0; slice2 < axisSize; slice2++) {
+    let hasData = false;
+    if (sliceType === 0 /* AXIAL */) {
+      const offset = slice2 * dimX * dimY;
+      for (let i = 0; i < dimX * dimY; i++) {
+        if (drawBitmap[offset + i] > 0) {
+          hasData = true;
+          break;
+        }
+      }
+    } else if (sliceType === 1 /* CORONAL */) {
+      for (let z = 0; z < dimZ; z++) {
+        for (let x = 0; x < dimX; x++) {
+          const idx = x + slice2 * dimX + z * dimX * dimY;
+          if (drawBitmap[idx] > 0) {
+            hasData = true;
+            break;
+          }
+        }
+        if (hasData) {
+          break;
+        }
+      }
+    } else if (sliceType === 2 /* SAGITTAL */) {
+      for (let z = 0; z < dimZ; z++) {
+        for (let y = 0; y < dimY; y++) {
+          const idx = slice2 + y * dimX + z * dimX * dimY;
+          if (drawBitmap[idx] > 0) {
+            hasData = true;
+            break;
+          }
+        }
+        if (hasData) {
+          break;
+        }
+      }
+    }
+    if (hasData) {
+      if (firstSliceWithData === -1) {
+        firstSliceWithData = slice2;
+      }
+      lastSliceWithData = slice2;
+    }
+  }
+  if (firstSliceWithData === -1 || lastSliceWithData === -1) {
+    return null;
+  }
+  return { first: firstSliceWithData, last: lastSliceWithData };
+}
+function extractSlice(sliceIndex, sliceType, drawBitmap, dims) {
+  const { dimX, dimY, dimZ } = dims;
+  let sliceData;
+  if (sliceType === 0 /* AXIAL */) {
+    sliceData = new Float32Array(dimX * dimY);
+    const offset = sliceIndex * dimX * dimY;
+    for (let i = 0; i < dimX * dimY; i++) {
+      sliceData[i] = drawBitmap[offset + i];
+    }
+  } else if (sliceType === 1 /* CORONAL */) {
+    sliceData = new Float32Array(dimX * dimZ);
+    for (let z = 0; z < dimZ; z++) {
+      for (let x = 0; x < dimX; x++) {
+        const srcIdx = x + sliceIndex * dimX + z * dimX * dimY;
+        const dstIdx = x + z * dimX;
+        sliceData[dstIdx] = drawBitmap[srcIdx];
+      }
+    }
+  } else if (sliceType === 2 /* SAGITTAL */) {
+    sliceData = new Float32Array(dimY * dimZ);
+    for (let z = 0; z < dimZ; z++) {
+      for (let y = 0; y < dimY; y++) {
+        const srcIdx = sliceIndex + y * dimX + z * dimX * dimY;
+        const dstIdx = y + z * dimY;
+        sliceData[dstIdx] = drawBitmap[srcIdx];
+      }
+    }
+  } else {
+    throw new Error("Invalid slice type");
+  }
+  return sliceData;
+}
+function extractIntensitySlice(sliceIndex, sliceType, imageData, dims, maxVal) {
+  const { dimX, dimY, dimZ } = dims;
+  let sliceData;
+  if (sliceType === 0 /* AXIAL */) {
+    sliceData = new Float32Array(dimX * dimY);
+    const offset = sliceIndex * dimX * dimY;
+    for (let i = 0; i < dimX * dimY; i++) {
+      sliceData[i] = imageData[offset + i] / maxVal;
+    }
+  } else if (sliceType === 1 /* CORONAL */) {
+    sliceData = new Float32Array(dimX * dimZ);
+    for (let z = 0; z < dimZ; z++) {
+      for (let x = 0; x < dimX; x++) {
+        const srcIdx = x + sliceIndex * dimX + z * dimX * dimY;
+        const dstIdx = x + z * dimX;
+        sliceData[dstIdx] = imageData[srcIdx] / maxVal;
+      }
+    }
+  } else if (sliceType === 2 /* SAGITTAL */) {
+    sliceData = new Float32Array(dimY * dimZ);
+    for (let z = 0; z < dimZ; z++) {
+      for (let y = 0; y < dimY; y++) {
+        const srcIdx = sliceIndex + y * dimX + z * dimX * dimY;
+        const dstIdx = y + z * dimY;
+        sliceData[dstIdx] = imageData[srcIdx] / maxVal;
+      }
+    }
+  } else {
+    throw new Error("Invalid slice type");
+  }
+  return sliceData;
+}
+function insertColorMask(mask, sliceIndex, sliceType, drawBitmap, dims, binaryThreshold, color) {
+  const { dimX, dimY, dimZ } = dims;
+  if (sliceType === 0 /* AXIAL */) {
+    const offset = sliceIndex * dimX * dimY;
+    for (let i = 0; i < mask.length; i++) {
+      if (mask[i] >= binaryThreshold) {
+        drawBitmap[offset + i] = color;
+      }
+    }
+  } else if (sliceType === 1 /* CORONAL */) {
+    for (let z = 0; z < dimZ; z++) {
+      for (let x = 0; x < dimX; x++) {
+        const srcIdx = x + z * dimX;
+        const dstIdx = x + sliceIndex * dimX + z * dimX * dimY;
+        if (mask[srcIdx] >= binaryThreshold) {
+          drawBitmap[dstIdx] = color;
+        }
+      }
+    }
+  } else if (sliceType === 2 /* SAGITTAL */) {
+    for (let z = 0; z < dimZ; z++) {
+      for (let y = 0; y < dimY; y++) {
+        const srcIdx = y + z * dimY;
+        const dstIdx = sliceIndex + y * dimX + z * dimX * dimY;
+        if (mask[srcIdx] >= binaryThreshold) {
+          drawBitmap[dstIdx] = color;
+        }
+      }
+    }
+  } else {
+    throw new Error("Invalid slice type");
+  }
+}
+function smoothSlice(slice2, width, height) {
+  if (width < 3 || height < 3) {
+    return;
+  }
+  const temp = new Float32Array(slice2.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = x + y * width;
+      if (x === 0 || x === width - 1) {
+        temp[idx] = slice2[idx];
+      } else {
+        temp[idx] = (slice2[idx - 1] + 2 * slice2[idx] + slice2[idx + 1]) * 0.25;
+      }
+    }
+  }
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = x + y * width;
+      if (y === 0 || y === height - 1) {
+        slice2[idx] = temp[idx];
+      } else {
+        slice2[idx] = (temp[idx - width] + 2 * temp[idx] + temp[idx + width]) * 0.25;
+      }
+    }
+  }
+}
+function calculateIntensityWeight(intensity1, intensity2, targetIntensity, intensitySigma) {
+  const diff1 = Math.abs(targetIntensity - intensity1);
+  const diff2 = Math.abs(targetIntensity - intensity2);
+  const weight1 = Math.exp(-diff1 * diff1 / (2 * intensitySigma * intensitySigma));
+  const weight2 = Math.exp(-diff2 * diff2 / (2 * intensitySigma * intensitySigma));
+  const totalWeight = weight1 + weight2;
+  if (totalWeight < 1e-6) {
+    return 0.5;
+  }
+  return weight1 / totalWeight;
+}
+function doGeometricInterpolation(sliceLow, sliceHigh, z, sliceIndexLow, sliceIndexHigh, interpolatedSlice) {
+  const fracHigh = (z - sliceIndexLow) / (sliceIndexHigh - sliceIndexLow);
+  const fracLow = 1 - fracHigh;
+  for (let i = 0; i < sliceLow.length; i++) {
+    interpolatedSlice[i] = sliceLow[i] * fracLow + sliceHigh[i] * fracHigh;
+  }
+}
+function doIntensityGuidedInterpolation(sliceLow, sliceHigh, z, sliceIndexLow, sliceIndexHigh, interpolatedSlice, opts, intensityLow, intensityHigh, targetIntensity) {
+  const baseFracHigh = (z - sliceIndexLow) / (sliceIndexHigh - sliceIndexLow);
+  const baseFracLow = 1 - baseFracHigh;
+  for (let i = 0; i < sliceLow.length; i++) {
+    if (sliceLow[i] > 0 || sliceHigh[i] > 0) {
+      const intensityWeight = calculateIntensityWeight(
+        intensityLow[i],
+        intensityHigh[i],
+        targetIntensity[i],
+        opts.intensitySigma
+      );
+      const alpha = opts.intensityWeight;
+      const combinedWeightLow = alpha * intensityWeight + (1 - alpha) * baseFracLow;
+      const combinedWeightHigh = 1 - combinedWeightLow;
+      interpolatedSlice[i] = sliceLow[i] * combinedWeightLow + sliceHigh[i] * combinedWeightHigh;
+    } else {
+      interpolatedSlice[i] = sliceLow[i] * baseFracLow + sliceHigh[i] * baseFracHigh;
+    }
+  }
+}
+function interpolateMaskSlices(drawBitmap, dims, imageData, maxVal, sliceIndexLow, sliceIndexHigh, options, refreshDrawingCallback) {
+  const { dimX, dimY, dimZ } = dims;
+  const sliceType = options.sliceType ?? 0 /* AXIAL */;
+  let sliceWidth, sliceHeight, maxSliceIndex;
+  if (sliceType === 0 /* AXIAL */) {
+    sliceWidth = dimX;
+    sliceHeight = dimY;
+    maxSliceIndex = dimZ - 1;
+  } else if (sliceType === 1 /* CORONAL */) {
+    sliceWidth = dimX;
+    sliceHeight = dimZ;
+    maxSliceIndex = dimY - 1;
+  } else if (sliceType === 2 /* SAGITTAL */) {
+    sliceWidth = dimY;
+    sliceHeight = dimZ;
+    maxSliceIndex = dimX - 1;
+  } else {
+    throw new Error("Invalid slice type. Must be AXIAL, CORONAL, or SAGITTAL");
+  }
+  const opts = {
+    intensityWeight: options.intensityWeight ?? 0.7,
+    binaryThreshold: options.binaryThreshold ?? 0.375,
+    intensitySigma: options.intensitySigma ?? 0.1,
+    applySmoothingToSlices: options.applySmoothingToSlices ?? true,
+    useIntensityGuided: options.useIntensityGuided ?? true
+  };
+  if (sliceIndexLow !== void 0 && sliceIndexHigh !== void 0) {
+    if (sliceIndexLow >= sliceIndexHigh) {
+      throw new Error("Low slice index must be less than high slice index");
+    }
+    if (sliceIndexLow < 0 || sliceIndexHigh > maxSliceIndex) {
+      throw new Error(`Slice indices out of bounds [0, ${maxSliceIndex}]`);
+    }
+  }
+  const colorRanges = /* @__PURE__ */ new Map();
+  for (let sliceIdx = 0; sliceIdx <= maxSliceIndex; sliceIdx++) {
+    const slice2 = extractSlice(sliceIdx, sliceType, drawBitmap, dims);
+    for (let i = 0; i < slice2.length; i++) {
+      const color = slice2[i];
+      if (color > 0) {
+        if (!colorRanges.has(color)) {
+          colorRanges.set(color, { min: sliceIdx, max: sliceIdx });
+        } else {
+          const range2 = colorRanges.get(color);
+          range2.min = Math.min(range2.min, sliceIdx);
+          range2.max = Math.max(range2.max, sliceIdx);
+        }
+      }
+    }
+  }
+  for (const [color, range2] of colorRanges) {
+    const colorSliceLow = sliceIndexLow !== void 0 ? Math.max(sliceIndexLow, range2.min) : range2.min;
+    const colorSliceHigh = sliceIndexHigh !== void 0 ? Math.min(sliceIndexHigh, range2.max) : range2.max;
+    if (colorSliceLow >= colorSliceHigh || colorSliceHigh - colorSliceLow < 2) {
+      continue;
+    }
+    const sliceLow = extractSlice(colorSliceLow, sliceType, drawBitmap, dims);
+    const sliceHigh = extractSlice(colorSliceHigh, sliceType, drawBitmap, dims);
+    const colorMaskLow = new Float32Array(sliceLow.length);
+    const colorMaskHigh = new Float32Array(sliceHigh.length);
+    for (let i = 0; i < sliceLow.length; i++) {
+      colorMaskLow[i] = sliceLow[i] === color ? 1 : 0;
+      colorMaskHigh[i] = sliceHigh[i] === color ? 1 : 0;
+    }
+    if (opts.applySmoothingToSlices) {
+      smoothSlice(colorMaskLow, sliceWidth, sliceHeight);
+      smoothSlice(colorMaskHigh, sliceWidth, sliceHeight);
+    }
+    for (let z = colorSliceLow + 1; z < colorSliceHigh; z++) {
+      const colorInterpolated = new Float32Array(sliceWidth * sliceHeight);
+      if (opts.useIntensityGuided && imageData) {
+        const intensityLow = extractIntensitySlice(colorSliceLow, sliceType, imageData, dims, maxVal);
+        const intensityHigh = extractIntensitySlice(colorSliceHigh, sliceType, imageData, dims, maxVal);
+        const targetIntensity = extractIntensitySlice(z, sliceType, imageData, dims, maxVal);
+        doIntensityGuidedInterpolation(
+          colorMaskLow,
+          colorMaskHigh,
+          z,
+          colorSliceLow,
+          colorSliceHigh,
+          colorInterpolated,
+          opts,
+          intensityLow,
+          intensityHigh,
+          targetIntensity
+        );
+      } else {
+        doGeometricInterpolation(colorMaskLow, colorMaskHigh, z, colorSliceLow, colorSliceHigh, colorInterpolated);
+      }
+      insertColorMask(colorInterpolated, z, sliceType, drawBitmap, dims, opts.binaryThreshold, color);
+    }
+  }
+  refreshDrawingCallback();
+}
+
+// src/shader-srcs.ts
+var vertRenderShader = `#version 300 es
+#line 4
+layout(location=0) in vec3 pos;
+layout(location=1) in vec3 texCoords;
+uniform mat4 mvpMtx;
+out vec3 vColor;
+void main(void) {
+	gl_Position = mvpMtx * vec4(pos, 1.0);
+	vColor = texCoords;
+}`;
+var kDrawFunc = `
+	vec4 drawColor(float scalar, float drawOpacity) {
+		float nlayer = float(textureSize(colormap, 0).y);
+		float layer = (nlayer - 0.5) / nlayer;
+		vec4 dcolor = texture(colormap, vec2((scalar * 255.0)/256.0 + 0.5/256.0, layer)).rgba;
+		dcolor.a *= drawOpacity;
+		return dcolor;
+}`;
+var kRenderFunc = `vec3 GetBackPosition(vec3 startPositionTex) {
+	vec3 startPosition = startPositionTex * volScale;
+	vec3 invR = 1.0 / rayDir;
+	vec3 tbot = invR * (vec3(0.0)-startPosition);
+	vec3 ttop = invR * (volScale-startPosition);
+	vec3 tmax = max(ttop, tbot);
+	vec2 t = min(tmax.xx, tmax.yz);
+	vec3 endPosition = startPosition + (rayDir * min(t.x, t.y));
+	//convert world position back to texture position:
+	endPosition = endPosition / volScale;
+	return endPosition;
+}
+
+vec4 applyClip (vec3 dir, inout vec4 samplePos, inout float len, inout bool isClip) {
+	float cdot = dot(dir,clipPlane.xyz);
+	isClip = false;
+	if  ((clipPlane.a > 1.0) || (cdot == 0.0)) return samplePos;
+	bool frontface = (cdot > 0.0);
+	float dis = (-clipPlane.a - dot(clipPlane.xyz, samplePos.xyz-0.5)) / cdot;
+	float thick = clipThick;
+	if (thick <= 0.0) thick = 2.0;
+	float  disBackFace = (-(clipPlane.a-thick) - dot(clipPlane.xyz, samplePos.xyz-0.5)) / cdot;
+	if (((frontface) && (dis >= len)) || ((!frontface) && (dis <= 0.0))) {
+		samplePos.a = len + 1.0;
+		return samplePos;
+	}
+	if (frontface) {
+		dis = max(0.0, dis);
+		samplePos = vec4(samplePos.xyz+dir * dis, dis);
+		if (dis > 0.0) isClip = true;
+		len = min(disBackFace, len);
+	}
+	if (!frontface) {
+		len = min(dis, len);
+		disBackFace = max(0.0, disBackFace);
+		if (len == dis) isClip = true;
+		samplePos = vec4(samplePos.xyz+dir * disBackFace, disBackFace);
+	}
+	return samplePos;
+}
+
+void clipVolume(inout vec3 startPos, inout vec3 backPos, int dim, float frac, bool isLo) {
+	vec3 dir = backPos - startPos;
+	float len = length(dir);
+	dir = normalize(dir);
+	// Discard if both startPos and backPos are outside the clipping plane
+	if (isLo && startPos[dim] < frac && backPos[dim] < frac) {
+		discard;
+	}
+	if (!isLo && startPos[dim] > frac && backPos[dim] > frac) {
+		discard;
+	}
+	vec4 plane = vec4(0.0, 0.0, 0.0, 0.5 - frac);
+	plane[dim] = 1.0;
+	float cdot = dot(dir, plane.xyz);
+	float dis = (-plane.w - dot(plane.xyz, startPos - vec3(0.5))) / cdot;
+	// Adjust startPos or backPos based on the intersection with the plane
+	bool isFrontFace = (cdot > 0.0);
+	if (!isLo)
+		isFrontFace = !isFrontFace;
+	if (dis > 0.0) {
+		if (isFrontFace) {
+				if (dis <= len) {
+					startPos = startPos + dir * dis;
+				}
+		} else {
+			if (dis < len) {
+				backPos = startPos + dir * dis;
+			}
+		}
+	}
+}
+
+void clipVolumeStart (inout vec3 startPos, inout vec3 backPos) {
+	// vec3 clipLo = vec3(0.1, 0.2, 0.4);
+	// vec3 clipHi = vec3(0.8, 0.7, 0.7);
+	for (int i = 0; i < 3; i++) {
+		if (clipLo[i] > 0.0)
+			clipVolume(startPos, backPos, i, clipLo[i], true);
+	}
+	for (int i = 0; i < 3; i++) {
+		if (clipHi[i] < 1.0)
+			clipVolume(startPos, backPos, i, clipHi[i], false);
+	}
+}
+
+float frac2ndc(vec3 frac) {
+//https://stackoverflow.com/questions/7777913/how-to-render-depth-linearly-in-modern-opengl-with-gl-fragcoord-z-in-fragment-sh
+	vec4 pos = vec4(frac.xyz, 1.0); //fraction
+	vec4 dim = vec4(vec3(textureSize(volume, 0)), 1.0);
+	pos = pos * dim;
+	vec4 shim = vec4(-0.5, -0.5, -0.5, 0.0);
+	pos += shim;
+	vec4 mm = transpose(matRAS) * pos;
+	float z_ndc = (mvpMtx * vec4(mm.xyz, 1.0)).z;
+	return (z_ndc + 1.0) / 2.0;
+}` + kDrawFunc;
+var kRenderInit = `void main() {
+	if (fColor.x > 2.0) {
+		fColor = vec4(1.0, 0.0, 0.0, 0.5);
+		return;
+	}
+	fColor = vec4(0.0,0.0,0.0,0.0);
+	vec4 clipPlaneColorX = clipPlaneColor;
+	//if (clipPlaneColor.a < 0.0)
+	//	clipPlaneColorX.a = - 1.0;
+	bool isColorPlaneInVolume = false;
+	if (clipPlaneColorX.a < 0.0) {
+		isColorPlaneInVolume = true;
+		clipPlaneColorX.a = 0.0;
+	}
+	//fColor = vec4(vColor.rgb, 1.0); return;
+	vec3 start = vColor;
+	gl_FragDepth = 0.0;
+	vec3 backPosition = GetBackPosition(start);
+	// fColor = vec4(backPosition, 1.0); return;
+	vec3 dir = normalize(backPosition - start);
+	clipVolumeStart(start, backPosition);
+	dir = normalize(dir);
+	float len = length(backPosition - start);
+	float lenVox = length((texVox * start) - (texVox * backPosition));
+	if ((lenVox < 0.5) || (len > 3.0)) { //length limit for parallel rays
+		return;
+	}
+	float sliceSize = len / lenVox; //e.g. if ray length is 1.0 and traverses 50 voxels, each voxel is 0.02 in unit cube
+	float stepSize = sliceSize; //quality: larger step is faster traversal, but fewer samples
+	float opacityCorrection = stepSize/sliceSize;
+	vec4 deltaDir = vec4(dir.xyz * stepSize, stepSize);
+	vec4 samplePos = vec4(start.xyz, 0.0); //ray position
+	float lenNoClip = len;
+	bool isClip = false;
+	vec4 clipPos = applyClip(dir, samplePos, len, isClip);
+	//if ((clipPos.a != samplePos.a) && (len < 3.0)) {
+	//start: OPTIONAL fast pass: rapid traversal until first hit
+	float stepSizeFast = sliceSize * 1.9;
+	vec4 deltaDirFast = vec4(dir.xyz * stepSizeFast, stepSizeFast);
+	while (samplePos.a <= len) {
+		float val = texture(volume, samplePos.xyz).a;
+		if (val > 0.01)
+			break;
+		samplePos += deltaDirFast; //advance ray position
+	}
+	float drawOpacityA = renderDrawAmbientOcclusionXY.y;
+	if ((samplePos.a >= len) && (((overlays < 1.0) && (drawOpacityA <= 0.0) ) || (backgroundMasksOverlays > 0)))  {
+		if (isClip)
+			fColor += clipPlaneColorX;
+		return;
+	}
+	fColor = vec4(1.0, 1.0, 1.0, 1.0);
+	//gl_FragDepth = frac2ndc(samplePos.xyz); //crude due to fast pass resolution
+	samplePos -= deltaDirFast;
+	if (samplePos.a < 0.0)
+		vec4 samplePos = vec4(start.xyz, 0.0); //ray position
+	//end: fast pass
+	vec4 colAcc = vec4(0.0,0.0,0.0,0.0);
+	vec4 firstHit = vec4(0.0,0.0,0.0,2.0 * lenNoClip);
+	const float earlyTermination = 0.95;
+	float backNearest = len; //assume no hit
+	float ran = fract(sin(gl_FragCoord.x * 12.9898 + gl_FragCoord.y * 78.233) * 43758.5453);
+	samplePos += deltaDir * ran; //jitter ray
+`;
+var kRenderTail = `
+	if (firstHit.a < len) {
+		gl_FragDepth = frac2ndc(firstHit.xyz);
+		vec4 paqdSample = texture(paqd, samplePos.xyz);
+		if (paqdSample.a > 0.0) {
+			//colAcc.rgb = paqdSample.rgb;
+			float a = max(abs(paqdUniforms[2]), abs(paqdUniforms[3]));
+			colAcc.rgb = mix(colAcc.rgb, paqdSample.rgb, 0.5 * paqdSample.a * a);
+		}
+		
+	}
+	colAcc.a = (colAcc.a / earlyTermination) * backOpacity;
+	fColor = colAcc;
+	//if (isClip) //CR
+	if ((isColorPlaneInVolume) && (clipPos.a != samplePos.a) && (abs(firstHit.a - clipPos.a) < deltaDir.a))
+		fColor.rgb = mix(fColor.rgb, clipPlaneColorX.rgb, abs(clipPlaneColor.a));
+		//fColor.rgb = mix(fColor.rgb, clipPlaneColorX.rgb, clipPlaneColorX.a * 0.65);
+	float renderDrawAmbientOcclusionX = renderDrawAmbientOcclusionXY.x;
+	float drawOpacity = renderDrawAmbientOcclusionXY.y;
+	if ((overlays < 1.0) && (drawOpacity <= 0.0))
+		return;
+	//overlay pass
+	len = lenNoClip;
+	samplePos = vec4(start.xyz, 0.0); //ray position
+	//start: OPTIONAL fast pass: rapid traversal until first hit
+	stepSizeFast = sliceSize * 1.0;
+	deltaDirFast = vec4(dir.xyz * stepSizeFast, stepSizeFast);
+	while (samplePos.a <= len) {
+		float val = texture(overlay, samplePos.xyz).a;
+		if (drawOpacity > 0.0)
+			val = max(val, texture(drawing, samplePos.xyz).r);
+		if (val > 0.001)
+			break;
+		samplePos += deltaDirFast; //advance ray position
+	}
+	if (samplePos.a >= len) {
+		if (isClip && (fColor.a == 0.0))
+				fColor += clipPlaneColorX;
+			return;
+	}
+	samplePos -= deltaDirFast;
+	if (samplePos.a < 0.0)
+		vec4 samplePos = vec4(start.xyz, 0.0); //ray position
+	//end: fast pass
+	float overFarthest = len;
+	colAcc = vec4(0.0, 0.0, 0.0, 0.0);
+
+	samplePos += deltaDir * ran; //jitter ray
+	vec4 overFirstHit = vec4(0.0,0.0,0.0,2.0 * len);
+	if (backgroundMasksOverlays > 0)
+		samplePos = firstHit;
+	bool firstDraw = true;
+	while (samplePos.a <= len) {
+		vec4 colorSample = texture(overlay, samplePos.xyz);
+		if ((colorSample.a < 0.01) && (drawOpacity > 0.0)) {
+			float val = texture(drawing, samplePos.xyz).r;
+			vec4 draw = drawColor(val, drawOpacity);
+			if ((draw.a > 0.0) && (firstDraw)) {
+				firstDraw = false;
+				float sum = 0.0;
+				const float mn = 1.0 / 256.0;
+				const float sampleRadius = 1.1;
+				float dx = sliceSize * sampleRadius;
+				vec3 center = samplePos.xyz;
+				//six neighbors that share a face
+				sum += min(texture(drawing, center.xyz + cross(vec3(0.0,0.0,+dx), dir)).r, mn);
+				sum += min(texture(drawing, center.xyz + cross(vec3(0.0,0.0,-dx), dir)).r, mn);
+				sum += min(texture(drawing, center.xyz + cross(vec3(0.0,+dx,0.0), dir)).r, mn);
+				sum += min(texture(drawing, center.xyz + cross(vec3(0.0,-dx,0.0), dir)).r, mn);
+				sum += min(texture(drawing, center.xyz + cross(vec3(+dx,0.0,0.0), dir)).r, mn);
+				sum += min(texture(drawing, center.xyz + cross(vec3(-dx,0.0,0.0), dir)).r, mn);
+				//float proportion = (sum / mn) / 6.0;
+				
+				//12 neighbors that share an edge
+				dx = sliceSize * sampleRadius * sqrt(2.0) * 0.5;
+				sum += min(texture(drawing, center.xyz + cross(vec3(0.0,+dx,+dx), dir)).r, mn);
+				sum += min(texture(drawing, center.xyz + cross(vec3(+dx,0.0,+dx), dir)).r, mn);
+				sum += min(texture(drawing, center.xyz + cross(vec3(+dx,+dx,0.0), dir)).r, mn);
+				sum += min(texture(drawing, center.xyz + cross(vec3(0.0,-dx,-dx), dir)).r, mn);
+				sum += min(texture(drawing, center.xyz + cross(vec3(-dx,0.0,-dx), dir)).r, mn);
+				sum += min(texture(drawing, center.xyz + cross(vec3(-dx,-dx,0.0), dir)).r, mn);
+
+				sum += min(texture(drawing, center.xyz + cross(vec3(0.0,+dx,-dx), dir)).r, mn);
+				sum += min(texture(drawing, center.xyz + cross(vec3(+dx,0.0,-dx), dir)).r, mn);
+				sum += min(texture(drawing, center.xyz + cross(vec3(+dx,-dx,0.0), dir)).r, mn);
+				
+				sum += min(texture(drawing, center.xyz + cross(vec3(0.0,-dx,+dx), dir)).r, mn);
+				sum += min(texture(drawing, center.xyz + cross(vec3(-dx,0.0,+dx), dir)).r, mn);
+				sum += min(texture(drawing, center.xyz + cross(vec3(-dx,+dx,0.0), dir)).r, mn);
+				float proportion = (sum / mn) / 18.0; //proportion of six neighbors is non-zero
+				
+				//a high proportion of hits means crevice
+				//since the AO term adds shadows that darken most voxels, it will result in dark surfaces
+				//the term brighten adds a little illumination to balance this
+				// without brighten, only the most extreme ridges will not be darker
+				const float brighten = 1.2;
+				vec3 ao = draw.rgb * (1.0 - proportion) * brighten;
+				draw.rgb = mix (draw.rgb, ao , renderDrawAmbientOcclusionX);
+			}
+			colorSample = draw;
+		}
+		samplePos += deltaDir; //advance ray position
+		if (colorSample.a >= 0.01) {
+			if (overFirstHit.a > len)
+				overFirstHit = samplePos;
+			colorSample.a *= renderOverlayBlend;
+			colorSample.a = 1.0-pow((1.0 - colorSample.a), opacityCorrection);
+			colorSample.rgb *= colorSample.a;
+			colAcc= (1.0 - colAcc.a) * colorSample + colAcc;
+			overFarthest = samplePos.a;
+			if ( colAcc.a > earlyTermination )
+				break;
+		}
+	}
+	//if (samplePos.a >= len) {
+	if (colAcc.a <= 0.0) {
+		if (isClip && (fColor.a == 0.0))
+			fColor += clipPlaneColorX;
+		return;
+	}
+	if (overFirstHit.a < firstHit.a)
+		gl_FragDepth = frac2ndc(overFirstHit.xyz);
+	float overMix = colAcc.a;
+	float overlayDepth = 0.3;
+	if (fColor.a <= 0.0)
+		overMix = 1.0;
+	else if (((overFarthest) > backNearest)) {
+		float dx = (overFarthest - backNearest)/1.73;
+		dx = fColor.a * pow(dx, overlayDepth);
+		overMix *= 1.0 - dx;
+	}
+	fColor.rgb = mix(fColor.rgb, colAcc.rgb, overMix);
+	fColor.a = max(fColor.a, colAcc.a);
+}`;
+var fragRenderSliceShader = `#version 300 es
+#line 215
+precision highp int;
+precision highp float;
+uniform vec3 rayDir;
+uniform vec3 texVox;
+uniform int backgroundMasksOverlays;
+uniform vec3 volScale;
+uniform vec4 clipPlane;
+uniform highp sampler3D volume, overlay;
+uniform highp sampler3D paqd;
+uniform vec4 paqdUniforms;
+uniform float overlays;
+uniform float clipThick;
+uniform vec3 clipLo;
+uniform vec3 clipHi;
+uniform float backOpacity;
+uniform mat4 mvpMtx;
+uniform mat4 matRAS;
+uniform vec4 clipPlaneColor;
+uniform float renderOverlayBlend;
+uniform highp sampler3D drawing;
+uniform highp sampler2D colormap;
+uniform vec2 renderDrawAmbientOcclusionXY;
+in vec3 vColor;
+out vec4 fColor;
+` + kRenderFunc + `
+	void main() {
+	vec3 start = vColor;
+	gl_FragDepth = 0.0;
+	vec3 backPosition = GetBackPosition(start);
+	vec3 dir = normalize(backPosition - start);
+	clipVolumeStart(start, backPosition);
+	float len = length(backPosition - start);
+	float lenVox = length((texVox * start) - (texVox * backPosition));
+	if ((lenVox < 0.5) || (len > 3.0)) { //length limit for parallel rays
+		fColor = vec4(0.0,0.0,0.0,0.0);
+		return;
+	}
+	float sliceSize = len / lenVox; //e.g. if ray length is 1.0 and traverses 50 voxels, each voxel is 0.02 in unit cube
+	float stepSize = sliceSize; //quality: larger step is faster traversal, but fewer samples
+	float opacityCorrection = stepSize/sliceSize;
+	vec4 deltaDir = vec4(dir.xyz * stepSize, stepSize);
+	vec4 samplePos = vec4(start.xyz, 0.0); //ray position
+	vec4 colAcc = vec4(0.0,0.0,0.0,0.0);
+	vec4 firstHit = vec4(0.0,0.0,0.0,2.0 * len);
+	const float earlyTermination = 0.95;
+	float backNearest = len; //assume no hit
+	float dis = len;
+	//check if axial plane is closest
+	vec4 aClip = vec4(0.0, 0.0, 1.0, (1.0- clipPlane.z) - 0.5);
+	float adis = (-aClip.a - dot(aClip.xyz, samplePos.xyz-0.5)) / dot(dir,aClip.xyz);
+	if (adis > 0.0)
+		dis = min(adis, dis);
+	//check of coronal plane is closest
+	vec4 cClip = vec4(0.0, 1.0, 0.0, (1.0- clipPlane.y) - 0.5);
+	float cdis = (-cClip.a - dot(cClip.xyz, samplePos.xyz-0.5)) / dot(dir,cClip.xyz);
+	if (cdis > 0.0)
+		dis = min(cdis, dis);
+	//check if coronal slice is closest
+	vec4 sClip = vec4(1.0, 0.0, 0.0, (1.0- clipPlane.x) - 0.5);
+	float sdis = (-sClip.a - dot(sClip.xyz, samplePos.xyz-0.5)) / dot(dir,sClip.xyz);
+	if (sdis > 0.0)
+		dis = min(sdis, dis);
+	if ((dis > 0.0) && (dis < len)) {
+		samplePos = vec4(samplePos.xyz+dir * dis, dis);
+		colAcc = texture(volume, samplePos.xyz);
+		colAcc.a = earlyTermination;
+		firstHit = samplePos;
+		backNearest = min(backNearest, samplePos.a);
+	}
+	//the following are only used by overlays
+	vec4 clipPlaneColorX = clipPlaneColor;
+	bool isColorPlaneInVolume = false;
+	float lenNoClip = len;
+	bool isClip = false;
+	vec4 clipPos = applyClip(dir, samplePos, len, isClip);
+	float stepSizeFast = sliceSize * 1.9;
+	vec4 deltaDirFast = vec4(dir.xyz * stepSizeFast, stepSizeFast);
+	if (samplePos.a < 0.0)
+		vec4 samplePos = vec4(start.xyz, 0.0); //ray position
+	float ran = fract(sin(gl_FragCoord.x * 12.9898 + gl_FragCoord.y * 78.233) * 43758.5453);
+	samplePos += deltaDir * ran; //jitter ray
+` + kRenderTail;
+var fragRenderShader = `#version 300 es
+#line 215
+precision highp int;
+precision highp float;
+uniform vec3 rayDir;
+uniform vec3 texVox;
+uniform int backgroundMasksOverlays;
+uniform vec3 volScale;
+uniform vec4 clipPlane;
+uniform highp sampler3D volume, overlay;
+uniform highp sampler3D paqd;
+uniform vec4 paqdUniforms;
+uniform float overlays;
+uniform float clipThick;
+uniform vec3 clipLo;
+uniform vec3 clipHi;
+uniform float backOpacity;
+uniform mat4 mvpMtx;
+uniform mat4 matRAS;
+uniform vec4 clipPlaneColor;
+uniform float renderOverlayBlend;
+uniform highp sampler3D drawing;
+uniform highp sampler2D colormap;
+uniform vec2 renderDrawAmbientOcclusionXY;
+in vec3 vColor;
+out vec4 fColor;
+` + kRenderFunc + kRenderInit + `while (samplePos.a <= len) {
+		vec4 colorSample = texture(volume, samplePos.xyz);
+		samplePos += deltaDir; //advance ray position
+		if (colorSample.a >= 0.01) {
+			if (firstHit.a > lenNoClip)
+				firstHit = samplePos;
+			backNearest = min(backNearest, samplePos.a);
+			colorSample.a = 1.0-pow((1.0 - colorSample.a), opacityCorrection);
+			colorSample.rgb *= colorSample.a;
+			colAcc= (1.0 - colAcc.a) * colorSample + colAcc;
+			if ( colAcc.a > earlyTermination )
+				break;
+		}
+	}
+` + kRenderTail;
+var gradientOpacityLutCount = 192;
+var kFragRenderGradientDecl = `#version 300 es
+#line 215
+precision highp int;
+precision highp float;
+uniform vec3 rayDir;
+uniform vec3 texVox;
+uniform int backgroundMasksOverlays;
+uniform vec3 volScale;
+uniform vec4 clipPlane;
+uniform highp sampler3D volume, overlay;
+uniform highp sampler3D paqd;
+uniform vec4 paqdUniforms;
+uniform float overlays;
+uniform float clipThick;
+uniform vec3 clipLo;
+uniform vec3 clipHi;
+uniform float backOpacity;
+uniform mat4 mvpMtx;
+uniform mat4 normMtx;
+uniform mat4 matRAS;
+uniform vec4 clipPlaneColor;
+uniform float renderOverlayBlend;
+uniform highp sampler3D drawing, gradient;
+uniform highp sampler2D colormap;
+uniform highp sampler2D matCap;
+uniform vec2 renderDrawAmbientOcclusionXY;
+uniform float gradientAmount;
+uniform float silhouettePower;
+uniform float gradientOpacity[${gradientOpacityLutCount}];
+in vec3 vColor;
+out vec4 fColor;
+`;
+var fragRenderGradientShader = kFragRenderGradientDecl + kRenderFunc + kRenderInit + `
+	float startPos = samplePos.a;
+	float clipClose = clipPos.a + 3.0 * deltaDir.a; //do not apply gradients near clip plane
+	float brighten = 2.0; //modulating makes average intensity darker 0.5 * 0.5 = 0.25
+	//vec4 prevGrad = vec4(0.0);
+	float silhouetteThreshold = 1.0 - silhouettePower;
+	while (samplePos.a <= len) {
+		vec4 colorSample = texture(volume, samplePos.xyz);
+		if (colorSample.a >= 0.0) {
+			vec4 grad = texture(gradient, samplePos.xyz);
+			grad.rgb = normalize(grad.rgb*2.0 - 1.0);
+			//if (grad.a < prevGrad.a)
+			//	grad.rgb = prevGrad.rgb;
+			//prevGrad = grad;
+			vec3 n = mat3(normMtx) * grad.rgb;
+			n.y = - n.y;
+			vec4 mc = vec4(texture(matCap, n.xy * 0.5 + 0.5).rgb, 1.0) * brighten;
+			mc = mix(vec4(1.0), mc, gradientAmount);
+			if (samplePos.a > clipClose)
+				colorSample.rgb *= mc.rgb;
+			if (firstHit.a > lenNoClip)
+				firstHit = samplePos;
+			backNearest = min(backNearest, samplePos.a);
+			colorSample.a = 1.0-pow((1.0 - colorSample.a), opacityCorrection);
+			int gradIdx = int(grad.a * ${gradientOpacityLutCount}.0);
+			colorSample.a *= gradientOpacity[gradIdx];
+			float lightNormDot = dot(grad.rgb, rayDir);
+			// n.b. "lightNormDor" is cosTheta, "silhouettePower" is Fresnel effect exponent
+ 			colorSample.a *= pow(1.0 - abs(lightNormDot), silhouettePower);
+ 			float viewAlign = abs(lightNormDot); // 0 = perpendicular, 1 = aligned
+ 			// linearly map silhouettePower (0..1) to a threshold range, e.g., [1.0, 0.0]
+ 			// Cull voxels that are too aligned with the view direction
+ 			if (viewAlign > silhouetteThreshold)
+ 				colorSample.a = 0.0;
+			colorSample.rgb *= colorSample.a;
+			colAcc= (1.0 - colAcc.a) * colorSample + colAcc;
+			if ( colAcc.a > earlyTermination )
+				break;
+		}
+		samplePos += deltaDir; //advance ray position
+	}
+` + kRenderTail;
+var fragRenderGradientValuesShader = kFragRenderGradientDecl + kRenderFunc + kRenderInit + `
+	float startPos = samplePos.a;
+	float clipClose = clipPos.a + 3.0 * deltaDir.a; //do not apply gradients near clip plane
+	float brighten = 2.0; //modulating makes average intensity darker 0.5 * 0.5 = 0.25
+	//vec4 prevGrad = vec4(0.0);
+	while (samplePos.a <= len) {
+		vec4 colorSample = texture(volume, samplePos.xyz);
+		if (colorSample.a >= 0.0) {
+			vec4 grad = texture(gradient, samplePos.xyz);
+			colorSample.rgb = abs(normalize(grad.rgb*2.0 - 1.0));
+			if (firstHit.a > lenNoClip)
+				firstHit = samplePos;
+			backNearest = min(backNearest, samplePos.a);
+			colorSample.a = 1.0-pow((1.0 - colorSample.a), opacityCorrection);
+			colorSample.rgb *= colorSample.a;
+			colAcc= (1.0 - colAcc.a) * colorSample + colAcc;
+			if ( colAcc.a > earlyTermination )
+				break;
+		}
+		samplePos += deltaDir; //advance ray position
+	}
+` + kRenderTail;
+var vertSliceMMShader = `#version 300 es
+#line 392
+layout(location=0) in vec3 pos;
+uniform int axCorSag;
+uniform mat4 mvpMtx;
+uniform mat4 frac2mm;
+uniform float slice;
+out vec3 texPos;
+void main(void) {
+	texPos = vec3(pos.x, pos.y, slice);
+	if (axCorSag > 1)
+		texPos = vec3(slice, pos.x, pos.y);
+	else if (axCorSag > 0)
+		texPos = vec3(pos.x, slice, pos.y);
+	vec4 mm = frac2mm * vec4(texPos, 1.0);
+	gl_Position = mvpMtx * mm;
+}`;
+var kFragSliceHead = `#version 300 es
+#line 411
+precision highp int;
+precision highp float;
+uniform highp sampler3D volume, overlay;
+uniform highp sampler3D paqd;
+uniform vec4 paqdUniforms;
+uniform int backgroundMasksOverlays;
+uniform float overlayOutlineWidth;
+uniform float overlayAlphaShader;
+uniform int axCorSag;
+uniform float overlays;
+uniform float opacity;
+uniform float drawOpacity;
+uniform float drawRimOpacity;
+uniform bool isAlphaClipDark;
+uniform highp sampler3D drawing;
+uniform highp sampler2D colormap;
+in vec3 texPos;
+out vec4 color;
+` + kDrawFunc + `
+vec4 blendRGBA(vec4 foreground, vec4 background) {
+  float alphaOut = foreground.a + background.a * (1.0 - foreground.a);
+  vec3 colorOut = (foreground.rgb * foreground.a + background.rgb * background.a * (1.0 - foreground.a)) / alphaOut;
+  return vec4(colorOut, alphaOut);
+}
+float paqdEaseAlpha(float alpha) {
+  // t are alpha transitions
+  // <t0 -> y0
+  // t0..t1  -> mix between y0..y1
+  // t1..t2 -> mix between y1..y2
+  // >t2 -> y2
+  float t0 = paqdUniforms[0]; // 0.3;
+  float t1 = 0.5 * (paqdUniforms[0] + paqdUniforms[1]); // 0.4;
+  float t2 = paqdUniforms[1]; // 0.9;
+  float y0 = 0.0;
+  float y1 = abs(paqdUniforms[2]); // 1.0;
+  float y2 = abs(paqdUniforms[3]); //0.25;
+  if (alpha <= t0) {
+    return y0;
+  } else if (alpha <= t1) {
+    return mix(y0, y1, (alpha - t0) / (t1 - t0)); // LERP 0.0 \u2192 1.0
+  } else if (alpha <= t2) {
+    return mix(y1, y2, (alpha - t1) / (t2 - t1)); // LERP 1.0 \u2192 0.2
+  } else {
+    return y2;
+  }
+}
+
+void main() {
+	//color = vec4(1.0, 0.0, 1.0, 1.0);return;
+	vec4 background = texture(volume, texPos);
+	color = vec4(background.rgb, opacity);
+	if ((isAlphaClipDark) && (background.a == 0.0)) color.a = 0.0; //FSLeyes clipping range
+	vec4 ocolor = vec4(0.0);
+	float overlayAlpha = overlayAlphaShader;
+	if (overlays > 0.0) {
+		ocolor = texture(overlay, texPos);
+		//dFdx for "boxing" issue 435 has aliasing on some implementations (coarse vs fine)
+		//however, this only identifies 50% of the edges due to aliasing effects
+		// http://www.aclockworkberry.com/shader-derivative-functions/
+		// https://bgolus.medium.com/distinctive-derivative-differences-cce38d36797b
+		//if ((ocolor.a >= 1.0) && ((dFdx(ocolor.a) != 0.0) || (dFdy(ocolor.a) != 0.0)  ))
+		//	ocolor.rbg = vec3(0.0, 0.0, 0.0);
+		bool isOutlineBelowNotAboveThreshold = true;
+		if (isOutlineBelowNotAboveThreshold) {
+			if ((overlayOutlineWidth > 0.0) && (ocolor.a < 1.0)) { //check voxel neighbors for edge
+				vec3 vx = (overlayOutlineWidth ) / vec3(textureSize(overlay, 0));
+				//6 voxel neighbors that share a face
+				vec3 vxR = vec3(texPos.x+vx.x, texPos.y, texPos.z);
+				vec3 vxL = vec3(texPos.x-vx.x, texPos.y, texPos.z);
+				vec3 vxA = vec3(texPos.x, texPos.y+vx.y, texPos.z);
+				vec3 vxP = vec3(texPos.x, texPos.y-vx.y, texPos.z);
+				vec3 vxS = vec3(texPos.x, texPos.y, texPos.z+vx.z);
+				vec3 vxI = vec3(texPos.x, texPos.y, texPos.z-vx.z);
+				float a = 0.0;
+				if (axCorSag != 2) {
+					a = max(a, texture(overlay, vxR).a);
+					a = max(a, texture(overlay, vxL).a);
+				}
+				if (axCorSag != 1) {
+					a = max(a, texture(overlay, vxA).a);
+					a = max(a, texture(overlay, vxP).a);
+				}
+				if (axCorSag != 0) {
+					a = max(a, texture(overlay, vxS).a);
+					a = max(a, texture(overlay, vxI).a);
+				}
+				bool isCheckCorners = true;
+				if (isCheckCorners) {
+					//12 voxel neighbors that share an edge
+					vec3 vxRA = vec3(texPos.x+vx.x, texPos.y+vx.y, texPos.z);
+					vec3 vxLA = vec3(texPos.x-vx.x, texPos.y+vx.y, texPos.z);
+					vec3 vxRP = vec3(texPos.x+vx.x, texPos.y-vx.y, texPos.z);
+					vec3 vxLP = vec3(texPos.x-vx.x, texPos.y-vx.y, texPos.z);
+					vec3 vxRS = vec3(texPos.x+vx.x, texPos.y, texPos.z+vx.z);
+					vec3 vxLS = vec3(texPos.x-vx.x, texPos.y, texPos.z+vx.z);
+					vec3 vxRI = vec3(texPos.x+vx.x, texPos.y, texPos.z-vx.z);
+					vec3 vxLI = vec3(texPos.x-vx.x, texPos.y, texPos.z-vx.z);
+					vec3 vxAS = vec3(texPos.x, texPos.y+vx.y, texPos.z+vx.z);
+					vec3 vxPS = vec3(texPos.x, texPos.y-vx.y, texPos.z+vx.z);
+					vec3 vxAI = vec3(texPos.x, texPos.y+vx.y, texPos.z-vx.z);
+					vec3 vxPI = vec3(texPos.x, texPos.y-vx.y, texPos.z-vx.z);
+
+					if (axCorSag == 0) { //axial corners
+						a = max(a, texture(overlay, vxRA).a);
+						a = max(a, texture(overlay, vxLA).a);
+						a = max(a, texture(overlay, vxRP).a);
+						a = max(a, texture(overlay, vxLP).a);
+					}
+					if (axCorSag == 1) { //coronal corners
+						a = max(a, texture(overlay, vxRS).a);
+						a = max(a, texture(overlay, vxLS).a);
+						a = max(a, texture(overlay, vxRI).a);
+						a = max(a, texture(overlay, vxLI).a);
+					}
+					if (axCorSag == 2) { //sagittal corners
+						a = max(a, texture(overlay, vxAS).a);
+						a = max(a, texture(overlay, vxPS).a);
+						a = max(a, texture(overlay, vxAI).a);
+						a = max(a, texture(overlay, vxPI).a);
+					}
+				}
+				if (a >= 1.0) {
+					ocolor = vec4(0.0, 0.0, 0.0, 1.0);
+					overlayAlpha = 1.0;
+				}
+			}
+
+		} else {
+			if ((overlayOutlineWidth > 0.0) && (ocolor.a >= 1.0)) { //check voxel neighbors for edge
+				vec3 vx = (overlayOutlineWidth ) / vec3(textureSize(overlay, 0));
+				vec3 vxR = vec3(texPos.x+vx.x, texPos.y, texPos.z);
+				vec3 vxL = vec3(texPos.x-vx.x, texPos.y, texPos.z);
+				vec3 vxA = vec3(texPos.x, texPos.y+vx.y, texPos.z);
+				vec3 vxP = vec3(texPos.x, texPos.y-vx.y, texPos.z);
+				vec3 vxS = vec3(texPos.x, texPos.y, texPos.z+vx.z);
+				vec3 vxI = vec3(texPos.x, texPos.y, texPos.z-vx.z);
+				float a = 1.0;
+				if (axCorSag != 2) {
+					a = min(a, texture(overlay, vxR).a);
+					a = min(a, texture(overlay, vxL).a);
+				}
+				if (axCorSag != 1) {
+					a = min(a, texture(overlay, vxA).a);
+					a = min(a, texture(overlay, vxP).a);
+				}
+				if (axCorSag != 0) {
+					a = min(a, texture(overlay, vxS).a);
+					a = min(a, texture(overlay, vxI).a);
+				}
+				if (a < 1.0) {
+					ocolor = vec4(0.0, 0.0, 0.0, 1.0);
+					overlayAlpha = 1.0;
+				}
+			}
+		} //outline above threshold
+	}
+
+`;
+var fragSlice2DShader = `#version 300 es
+#line 411
+precision highp int;
+precision highp float;
+uniform highp sampler2D volume, overlay;
+uniform int backgroundMasksOverlays;
+uniform float overlayOutlineWidth;
+uniform float overlayAlphaShader;
+uniform int axCorSag;
+uniform float overlays;
+uniform float opacity;
+uniform float drawOpacity;
+uniform bool isAlphaClipDark;
+uniform highp sampler2D drawing;
+uniform highp sampler2D colormap;
+in vec3 texPos;
+out vec4 color;` + kDrawFunc + `void main() {
+	//color = vec4(1.0, 0.0, 1.0, 1.0);return;
+	vec4 background = texture(volume, texPos.xy);
+	color = vec4(background.rgb, opacity);
+	if ((isAlphaClipDark) && (background.a == 0.0)) color.a = 0.0; //FSLeyes clipping range
+	vec4 dcolor = drawColor(texture(drawing, texPos.xy).r, drawOpacity);
+	if (dcolor.a > 0.0) {
+		color.rgb = mix(color.rgb, dcolor.rgb, dcolor.a);
+		color.a = max(drawOpacity, color.a);
+	}
+}`;
+var kFragSliceTail = `	ocolor.a *= overlayAlpha;
+	float drawV = texture(drawing, texPos).r;
+	vec4 dcolor = drawColor(drawV, drawOpacity);
+	if (dcolor.a > 0.0) {
+		if (drawRimOpacity >= 0.0) {
+			vec3 vx = 1.0 / vec3(textureSize(drawing, 0));
+			//6 voxel neighbors that share a face
+			vec3 offsetX = dFdx(texPos); // left-right spacing
+			vec3 offsetY = dFdy(texPos); // up-down spacing
+			float L = texture(drawing, texPos - offsetX).r;
+			float R = texture(drawing, texPos + offsetX).r;
+			float T = texture(drawing, texPos - offsetY).r;
+			float B = texture(drawing, texPos + offsetY).r;
+			if (L != drawV || R != drawV || T != drawV || B != drawV)
+				dcolor.a = drawRimOpacity;
+		}
+		color.rgb = mix(color.rgb, dcolor.rgb, dcolor.a);
+		color.a = max(drawOpacity, color.a);
+	}
+	vec4 pcolor = texture(paqd, texPos);
+	if (pcolor.a > 0.0) {
+		pcolor.a = paqdEaseAlpha(pcolor.a);
+		if (pcolor.a > 0.0) {
+			if (paqdUniforms[3] < 0.0)
+				ocolor = blendRGBA(pcolor, ocolor);
+			else
+				ocolor = blendRGBA(ocolor, pcolor);
+		}
+	}
+	if ((backgroundMasksOverlays > 0) && (background.a == 0.0))
+		return;
+	float a = color.a + ocolor.a * (1.0 - color.a); // premultiplied alpha
+	if (a == 0.0) return;
+	color.rgb = mix(color.rgb, ocolor.rgb, ocolor.a / a);
+	color.a = a;
+}`;
+var fragSliceMMShader = kFragSliceHead + kFragSliceTail;
+var fragSliceV1Shader = kFragSliceHead + `	if (ocolor.a > 0.0) {
+		//https://gamedev.stackexchange.com/questions/102889/is-it-possible-to-convert-vec4-to-int-in-glsl-using-opengl-es
+		uint alpha = uint(ocolor.a * 255.0);
+		vec3 xyzFlip = vec3(float((uint(1) & alpha) > uint(0)), float((uint(2) & alpha) > uint(0)), float((uint(4) & alpha) > uint(0)));
+		//convert from 0 and 1 to -1 and 1
+		xyzFlip = (xyzFlip * 2.0) - 1.0;
+		//https://math.stackexchange.com/questions/1905533/find-perpendicular-distance-from-point-to-line-in-3d
+		//v1 principle direction of tensor for this voxel
+		vec3 v1 = ocolor.rgb;
+		//flips encode polarity to convert from 0..1 to -1..1 (27 bits vs 24 bit precision)
+		v1 = normalize( v1 * xyzFlip);
+		vec3 vxl = fract(texPos * vec3(textureSize(volume, 0))) - 0.5;
+		//vxl coordinates now -0.5..+0.5 so 0,0,0 is origin
+		vxl.x = -vxl.x;
+		float t = dot(vxl,v1);
+		vec3 P = t * v1;
+		float dx = length(P-vxl);
+		ocolor.a = 1.0 - smoothstep(0.2,0.25, dx);
+		//if modulation was applied, use that to scale alpha not color:
+		ocolor.a *= length(ocolor.rgb);
+		ocolor.rgb = normalize(ocolor.rgb);
+		//compute distance one half voxel closer to viewer:
+		float pan = 0.5;
+		if (axCorSag == 0)
+			vxl.z -= pan;
+		if (axCorSag == 1)
+			vxl.y -= pan;
+		if (axCorSag == 2)
+			vxl.x += pan;
+		t = dot(vxl,v1);
+		P = t * v1;
+		float dx2 = length(P-vxl);
+		ocolor.rgb += (dx2-dx-(0.5 * pan)) * 1.0;
+	}
+` + kFragSliceTail;
+var fragRectShader = `#version 300 es
+#line 480
+precision highp int;
+precision highp float;
+uniform vec4 lineColor;
+out vec4 color;
+void main() {
+	color = lineColor;
+}`;
+var fragRectOutlineShader = `#version 300 es
+#line 723
+precision highp int;
+precision highp float;
+
+uniform vec4 lineColor;
+uniform vec4 leftTopWidthHeight;
+uniform float thickness; // line thickness in pixels
+uniform vec2 canvasWidthHeight;
+
+out vec4 color;
+
+void main() {
+    // fragment position in screen coordinates
+    vec2 fragCoord = gl_FragCoord.xy;
+
+    // canvas height
+    float canvasHeight = canvasWidthHeight.y;
+
+    // 'top' and 'bottom' to match gl_FragCoord.y coordinate system
+    float top = canvasHeight - leftTopWidthHeight.y;
+    float bottom = top - leftTopWidthHeight.w;
+
+    // left and right edges
+    float left = leftTopWidthHeight.x;
+    float right = left + leftTopWidthHeight.z;
+
+    bool withinLeft = fragCoord.x >= left && fragCoord.x <= left + thickness;
+    bool withinRight = fragCoord.x <= right && fragCoord.x >= right - thickness;
+    bool withinTop = fragCoord.y <= top && fragCoord.y >= top - thickness;
+    bool withinBottom = fragCoord.y >= bottom && fragCoord.y <= bottom + thickness;
+
+    bool isOutline = withinLeft || withinRight || withinTop || withinBottom;
+
+    if (isOutline) {
+        color = lineColor;
+    } else {
+        discard; 
+    }
+}`;
+var vertColorbarShader = `#version 300 es
+#line 490
+layout(location=0) in vec3 pos;
+uniform vec2 canvasWidthHeight;
+uniform vec4 leftTopWidthHeight;
+out vec2 vColor;
+void main(void) {
+	//convert pixel x,y space 1..canvasWidth,1..canvasHeight to WebGL 1..-1,-1..1
+	vec2 frac;
+	frac.x = (leftTopWidthHeight.x + (pos.x * leftTopWidthHeight.z)) / canvasWidthHeight.x; //0..1
+	frac.y = 1.0 - ((leftTopWidthHeight.y + ((1.0 - pos.y) * leftTopWidthHeight.w)) / canvasWidthHeight.y); //1..0
+	frac = (frac * 2.0) - 1.0;
+	gl_Position = vec4(frac, 0.0, 1.0);
+	vColor = pos.xy;
+}`;
+var fragColorbarShader = `#version 300 es
+#line 506
+precision highp int;
+precision highp float;
+uniform highp sampler2D colormap;
+uniform float layer;
+in vec2 vColor;
+out vec4 color;
+void main() {
+	float nlayer = float(textureSize(colormap, 0).y);
+	float fmap = (0.5 + layer) / nlayer;
+	color = vec4(texture(colormap, vec2(vColor.x, fmap)).rgb, 1.0);
+}`;
+var vertRectShader = `#version 300 es
+#line 520
+layout(location=0) in vec3 pos;
+uniform vec2 canvasWidthHeight;
+uniform vec4 leftTopWidthHeight;
+void main(void) {
+	//convert pixel x,y space 1..canvasWidth,1..canvasHeight to WebGL 1..-1,-1..1
+	vec2 frac;
+	frac.x = (leftTopWidthHeight.x + (pos.x * leftTopWidthHeight.z)) / canvasWidthHeight.x; //0..1
+	frac.y = 1.0 - ((leftTopWidthHeight.y + ((1.0 - pos.y) * leftTopWidthHeight.w)) / canvasWidthHeight.y); //1..0
+	frac = (frac * 2.0) - 1.0;
+	gl_Position = vec4(frac, 0.0, 1.0);
+}`;
+var vertLineShader = `#version 300 es
+#line 534
+layout(location=0) in vec3 pos;
+uniform vec2 canvasWidthHeight;
+uniform float thickness;
+uniform vec4 startXYendXY;
+void main(void) {
+	vec2 posXY = mix(startXYendXY.xy, startXYendXY.zw, pos.x);
+	vec2 dir = normalize(startXYendXY.xy - startXYendXY.zw);
+	posXY += vec2(-dir.y, dir.x) * thickness * (pos.y - 0.5);
+	posXY.x = (posXY.x) / canvasWidthHeight.x; //0..1
+	posXY.y = 1.0 - (posXY.y / canvasWidthHeight.y); //1..0
+	gl_Position = vec4((posXY * 2.0) - 1.0, 0.0, 1.0);
+}`;
+var vertLine3DShader = `#version 300 es
+#line 534
+layout(location=0) in vec3 pos;
+uniform vec2 canvasWidthHeight;
+uniform float thickness;
+uniform vec2 startXY;
+uniform vec3 endXYZ; // transformed XYZ point
+void main(void) {	
+	vec2 posXY = mix(startXY.xy, endXYZ.xy, pos.x);
+	vec2 startDiff = endXYZ.xy - startXY.xy;
+	float startDistance = length(startDiff);
+	vec2 diff = endXYZ.xy - posXY;
+	float currentDistance = length(diff);
+	vec2 dir = normalize(startXY.xy - endXYZ.xy);
+	posXY += vec2(-dir.y, dir.x) * thickness * (pos.y - 0.5);
+	posXY.x = (posXY.x) / canvasWidthHeight.x; //0..1
+	posXY.y = 1.0 - (posXY.y / canvasWidthHeight.y); //1..0	
+	float z = endXYZ.z * ( 1.0 - abs(currentDistance/startDistance)); 
+	gl_Position = vec4((posXY * 2.0) - 1.0, z, 1.0);
+}`;
+var vertBmpShader = `#version 300 es
+#line 549
+layout(location=0) in vec3 pos;
+uniform vec2 canvasWidthHeight;
+uniform vec4 leftTopWidthHeight;
+out vec2 vUV;
+void main(void) {
+	//convert pixel x,y space 1..canvasWidth,1..canvasHeight to WebGL 1..-1,-1..1
+	vec2 frac;
+	frac.x = (leftTopWidthHeight.x + (pos.x * leftTopWidthHeight.z)) / canvasWidthHeight.x; //0..1
+	frac.y = 1.0 - ((leftTopWidthHeight.y + ((1.0 - pos.y) * leftTopWidthHeight.w)) / canvasWidthHeight.y); //1..0
+	frac = (frac * 2.0) - 1.0;
+	gl_Position = vec4(frac, 0.0, 1.0);
+	vUV = vec2(pos.x, 1.0 - pos.y);
+}`;
+var fragBmpShader = `#version 300 es
+#line 565
+precision highp int;
+precision highp float;
+uniform highp sampler2D bmpTexture;
+in vec2 vUV;
+out vec4 color;
+void main() {
+	color = texture(bmpTexture, vUV);
+}`;
+var vertFontShader = `#version 300 es
+#line 576
+layout(location=0) in vec3 pos;
+uniform vec2 canvasWidthHeight;
+uniform vec4 leftTopWidthHeight;
+uniform vec4 uvLeftTopWidthHeight;
+out vec2 vUV;
+void main(void) {
+	//convert pixel x,y space 1..canvasWidth,1..canvasHeight to WebGL 1..-1,-1..1
+	vec2 frac;
+	frac.x = (leftTopWidthHeight.x + (pos.x * leftTopWidthHeight.z)) / canvasWidthHeight.x; //0..1
+	frac.y = 1.0 - ((leftTopWidthHeight.y + ((1.0 - pos.y) * leftTopWidthHeight.w)) / canvasWidthHeight.y); //1..0
+	frac = (frac * 2.0) - 1.0;
+	gl_Position = vec4(frac, 0.0, 1.0);
+	vUV = vec2(uvLeftTopWidthHeight.x + (pos.x * uvLeftTopWidthHeight.z), uvLeftTopWidthHeight.y  + ((1.0 - pos.y) * uvLeftTopWidthHeight.w) );
+}`;
+var fragFontShader = `#version 300 es
+#line 593
+precision highp int;
+precision highp float;
+uniform highp sampler2D fontTexture;
+uniform vec4 fontColor;
+uniform float screenPxRange;
+in vec2 vUV;
+out vec4 color;
+float median(float r, float g, float b) {
+	return max(min(r, g), min(max(r, g), b));
+}
+void main() {
+	vec3 msd = texture(fontTexture, vUV).rgb;
+	float sd = median(msd.r, msd.g, msd.b);
+	float screenPxDistance = screenPxRange*(sd - 0.5);
+	float opacity = clamp(screenPxDistance + 0.5, 0.0, 1.0);
+	color = vec4(fontColor.rgb , fontColor.a * opacity);
+}`;
+var vertCircleShader = `#version 300 es
+layout(location=0) in vec3 pos;
+uniform vec2 canvasWidthHeight;
+uniform vec4 leftTopWidthHeight;
+uniform vec4 uvLeftTopWidthHeight;
+out vec2 vUV;
+void main(void) {
+	//convert pixel x,y space 1..canvasWidth,1..canvasHeight to WebGL 1..-1,-1..1
+	vec2 frac;
+	frac.x = (leftTopWidthHeight.x + (pos.x * leftTopWidthHeight.z)) / canvasWidthHeight.x; //0..1
+	frac.y = 1.0 - ((leftTopWidthHeight.y + ((1.0 - pos.y) * leftTopWidthHeight.w)) / canvasWidthHeight.y); //1..0
+	frac = (frac * 2.0) - 1.0;
+	gl_Position = vec4(frac, 0.0, 1.0);
+	vUV = pos.xy;
+}`;
+var fragCircleShader = `#version 300 es
+precision highp int;
+precision highp float;
+uniform vec4 circleColor;
+uniform float fillPercent;
+in vec2 vUV;
+out vec4 color;
+void main() {
+	/* Check if the pixel is inside the circle
+		 and color it with a gradient. Otherwise, color it 
+		 transparent   */
+	float distance = length(vUV-vec2(0.5,0.5));
+	if ( distance < 0.5 && distance >= (1.0 - fillPercent) / 2.0){
+			color = vec4(circleColor.r,circleColor.g,circleColor.b,circleColor.a) ;			
+	}else{
+			color = vec4(0.0,0.0,0.0,0.0);
+	}
+}
+`;
+var vertOrientShader = `#version 300 es
+#line 613
+precision highp int;
+precision highp float;
+in vec3 vPos;
+out vec2 TexCoord;
+void main() {
+	TexCoord = vPos.xy;
+	gl_Position = vec4( (vPos.xy-vec2(0.5,0.5)) * 2.0, 0.0, 1.0);
+}`;
+var fragOrientShaderU = `#version 300 es
+uniform highp usampler3D intensityVol;
+`;
+var fragOrientShaderI = `#version 300 es
+uniform highp isampler3D intensityVol;
+`;
+var fragOrientShaderF = `#version 300 es
+uniform highp sampler3D intensityVol;
+`;
+var fragOrientShaderAtlas = `#line 1042
+precision highp int;
+precision highp float;
+in vec2 TexCoord;
+out vec4 FragColor;
+uniform bool isAdditiveBlend;
+uniform float coordZ;
+uniform float layer;
+uniform highp sampler2D colormap;
+uniform lowp sampler3D blend3D;
+uniform float opacity;
+uniform uint activeIndex;
+uniform vec4 xyzaFrac;
+uniform mat4 mtx;
+float textureWidth;
+float nlayer;
+float layerY;
+
+vec4 scalar2color(uint idx) {
+	float fx = (float(idx) + 0.5) / textureWidth;
+	vec4 clr = texture(colormap, vec2(fx, layerY)).rgba;
+	if (clr.a > 0.0)
+		clr.a = 1.0;
+	clr.a *= opacity;
+	return clr;
+}
+void main(void) {
+	vec4 vx = vec4(TexCoord.x, TexCoord.y, coordZ, 1.0) * mtx;
+	uint idx = uint(texture(intensityVol, vx.xyz).r);
+	if (idx == uint(0)) {
+		if (layer < 1.0) {
+			FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+			return;
+		}
+		FragColor = texture(blend3D, vec3(TexCoord.xy, coordZ));
+		return;
+	}
+	textureWidth = float(textureSize(colormap, 0).x);
+	nlayer = float(textureSize(colormap, 0).y);
+	layerY = ((2.0 * layer) + 1.5) / nlayer;
+	//idx = ((idx - uint(1)) % uint(100))+uint(1);
+	FragColor = scalar2color(idx);
+	bool isBorder = false;
+	vx = vec4(TexCoord.x+xyzaFrac.x, TexCoord.y, coordZ, 1.0) * mtx;
+	uint R = uint(texture(intensityVol, vx.xyz).r);
+	vx = vec4(TexCoord.x-xyzaFrac.x, TexCoord.y, coordZ, 1.0) * mtx;
+	uint L = uint(texture(intensityVol, vx.xyz).r);
+	vx = vec4(TexCoord.x, TexCoord.y+xyzaFrac.y, coordZ, 1.0) * mtx;
+	uint A = uint(texture(intensityVol, vx.xyz).r);
+	vx = vec4(TexCoord.x, TexCoord.y-xyzaFrac.y, coordZ, 1.0) * mtx;
+	uint P = uint(texture(intensityVol, vx.xyz).r);
+	vx = vec4(TexCoord.x, TexCoord.y, coordZ+xyzaFrac.z, 1.0) * mtx;
+	uint S = uint(texture(intensityVol, vx.xyz).r);
+	vx = vec4(TexCoord.x, TexCoord.y, coordZ-xyzaFrac.z, 1.0) * mtx;
+	uint I = uint(texture(intensityVol, vx.xyz).r);
+	vec4 centerColor = FragColor;
+	FragColor.a += scalar2color(R).a;
+	FragColor.a += scalar2color(L).a;
+	FragColor.a += scalar2color(A).a;
+	FragColor.a += scalar2color(P).a;
+	FragColor.a += scalar2color(S).a;
+	FragColor.a += scalar2color(I).a;
+	FragColor.a /= 7.0;
+	if ((!isBorder) &&(idx == activeIndex)) {
+		if (centerColor.a > 0.5)
+			FragColor.a *= 0.4;
+		else
+			FragColor.a =0.8;
+	}
+	if (xyzaFrac.a != 0.0) { //outline
+		if ((idx != R) || (idx != L) || (idx != A) || (idx != P) || (idx != S) || (idx != I)) {
+			isBorder = true;
+			if (xyzaFrac.a > 0.0)
+				FragColor.a = xyzaFrac.a;
+			else
+				FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+		}
+	}
+	if (layer < 1.0) return;
+		vec4 prevColor = texture(blend3D, vec3(TexCoord.xy, coordZ));
+		// https://en.wikipedia.org/wiki/Alpha_compositing
+		float aout = FragColor.a + (1.0 - FragColor.a) * prevColor.a;
+		if (aout <= 0.0) return;
+		if (isAdditiveBlend)
+			FragColor.rgb = ((FragColor.rgb * FragColor.a) + (prevColor.rgb * prevColor.a)) / aout;
+		else
+			FragColor.rgb = ((FragColor.rgb * FragColor.a) + (prevColor.rgb * prevColor.a * (1.0 - FragColor.a))) / aout;
+		FragColor.a = aout;
+}`;
+var fragOrientShader = `#line 691
+precision highp int;
+precision highp float;
+in vec2 TexCoord;
+out vec4 FragColor;
+uniform float coordZ;
+uniform float layer;
+uniform float scl_slope;
+uniform float scl_inter;
+uniform float cal_max;
+uniform float cal_min;
+uniform float cal_maxNeg;
+uniform float cal_minNeg;
+uniform bool isAlphaThreshold;
+uniform bool isColorbarFromZero;
+uniform bool isAdditiveBlend;
+uniform highp sampler2D colormap;
+uniform lowp sampler3D blend3D;
+uniform int modulation;
+uniform highp sampler3D modulationVol;
+uniform float opacity;
+uniform mat4 mtx;
+void main(void) {
+	vec4 vx = vec4(TexCoord.xy, coordZ, 1.0) * mtx;
+	if ((vx.x < 0.0) || (vx.x > 1.0) || (vx.y < 0.0) || (vx.y > 1.0) || (vx.z < 0.0) || (vx.z > 1.0)) {
+		//set transparent if out of range
+		//https://webglfundamentals.org/webgl/webgl-3d-textures-repeat-clamp.html
+		FragColor = texture(blend3D, vec3(TexCoord.xy, coordZ));
+		return;
+	}
+	float f = (scl_slope * float(texture(intensityVol, vx.xyz).r)) + scl_inter;
+	float mn = cal_min;
+	float mx = cal_max;
+	if ((isAlphaThreshold) || (isColorbarFromZero))
+		mn = 0.0;
+	float r = max(0.00001, abs(mx - mn));
+	mn = min(mn, mx);
+	float txl = mix(0.0, 1.0, (f - mn) / r);
+	if (f > mn) { //issue1139: survives threshold, so round up to opaque voxel
+		txl = max(txl, 2.0/256.0);
+	}
+	//https://stackoverflow.com/questions/5879403/opengl-texture-coordinates-in-pixel-space
+	float nlayer = float(textureSize(colormap, 0).y);
+	//each volume has two color maps:
+	// (layer*2) = negative and (layer * 2) + 1 = positive
+	float y = ((2.0 * layer) + 1.5)/nlayer;
+	FragColor = texture(colormap, vec2(txl, y)).rgba;
+	//negative colors
+	mn = cal_minNeg;
+	mx = cal_maxNeg;
+	if ((isAlphaThreshold) || (isColorbarFromZero))
+		mx = 0.0;
+	//if ((!isnan(cal_minNeg)) && ( f < mx)) {
+	if ((cal_minNeg < cal_maxNeg) && ( f < mx)) {
+		r = max(0.00001, abs(mx - mn));
+		mn = min(mn, mx);
+		txl = 1.0 - mix(0.0, 1.0, (f - mn) / r);
+		//issue1139: survives threshold, so round up to opaque voxel
+		txl = max(txl, 2.0/256.0);
+		y = ((2.0 * layer) + 0.5)/nlayer;
+		FragColor = texture(colormap, vec2(txl, y));
+	}
+	if (layer > 0.7)
+		FragColor.a = step(0.00001, FragColor.a);
+	//if (modulation > 10)
+	//	FragColor.a *= texture(modulationVol, vx.xyz).r;
+	//	FragColor.rgb *= texture(modulationVol, vx.xyz).r;
+	if (isAlphaThreshold) {
+		if ((cal_minNeg != cal_maxNeg) && ( f < 0.0) && (f > cal_maxNeg))
+			FragColor.a = pow(-f / -cal_maxNeg, 2.0);
+		else if ((f > 0.0) && (cal_min > 0.0))
+			FragColor.a *= pow(f / cal_min, 2.0); //issue435:  A = (V/X)**2
+		//FragColor.g = 0.0;
+	} else if (isColorbarFromZero) {
+		if ((cal_minNeg != cal_maxNeg) && ( f < 0.0) && (f > cal_maxNeg))
+			FragColor.a = 0.0;
+		else if ((f > 0.0) && (cal_min > 0.0) && (f < cal_min))
+			FragColor.a *= 0.0;
+
+	}
+	if (modulation == 1) {
+		FragColor.rgb *= texture(modulationVol, vx.xyz).r;
+	} else if (modulation == 2) {
+		FragColor.a = texture(modulationVol, vx.xyz).r;
+	}
+	FragColor.a *= opacity;
+	if (layer < 1.0) return;
+	vec4 prevColor = texture(blend3D, vec3(TexCoord.xy, coordZ));
+	// https://en.wikipedia.org/wiki/Alpha_compositing
+	float aout = FragColor.a + (1.0 - FragColor.a) * prevColor.a;
+	if (aout <= 0.0) return;
+	if (isAdditiveBlend)
+		FragColor.rgb = ((FragColor.rgb * FragColor.a) + (prevColor.rgb * prevColor.a)) / aout;
+	else
+		FragColor.rgb = ((FragColor.rgb * FragColor.a) + (prevColor.rgb * prevColor.a * (1.0 - FragColor.a))) / aout;
+	FragColor.a = aout;
+}`;
+var fragPAQDOrientShader = `#line 773
+precision highp int;
+precision highp float;
+in vec2 TexCoord;
+out vec4 FragColor;
+uniform float coordZ;
+uniform float layer;
+uniform float scl_slope;
+uniform float scl_inter;
+uniform float cal_max;
+uniform float cal_min;
+uniform highp sampler2D colormap;
+uniform lowp sampler3D blend3D;
+uniform float opacity;
+uniform mat4 mtx;
+uniform bool hasAlpha;
+uniform int modulation;
+uniform highp sampler3D modulationVol;
+float textureWidth;
+float nlayer;
+float layerY;
+
+vec4 scalar2color(uint idx) {
+	float fx = (float(idx) + 0.5) / textureWidth;
+	vec4 clr = texture(colormap, vec2(fx, layerY)).rgba;
+	if (clr.a > 0.0)
+		clr.a = 1.0;
+	clr.a *= opacity;
+	return clr;
+}
+
+vec4 paqd2color(uvec4 rgba) {
+  // paqd r: max prob index, g: 2nd index, b: max prob a: 2nd prob
+  float prob1 = float(rgba.b)/255.0;
+  float prob2 = float(rgba.a)/255.0;
+  vec4 clr1 = scalar2color(rgba.r);
+  vec4 clr2 = scalar2color(rgba.g);
+  float total = prob1 + prob2;
+  vec4 clr = vec4(clr1.rgb, total);
+  // vec4 clr = vec4(clr1.rgb, prob1);
+  if (total > 0.0) {
+    clr.rgb = mix(clr2.rgb, clr1.rgb, prob1 / total);
+  }
+  return clr;
+}
+void main(void) {
+	vec4 vx = vec4(TexCoord.xy, coordZ, 1.0) * mtx;
+	ivec3 voxelCoord = ivec3(vx.xyz * vec3(textureSize(intensityVol, 0)));
+	uvec4 rgba = texelFetch(intensityVol, voxelCoord, 0);
+	FragColor = vec4(0.0, 0.0, 0.0, 0.0);
+	if (rgba.r > uint(0)) {
+		textureWidth = float(textureSize(colormap, 0).x);
+		nlayer = float(textureSize(colormap, 0).y);
+		layerY = ((2.0 * layer) + 1.5) / nlayer;
+		FragColor = paqd2color(rgba);
+		return;
+	}
+	// if (layer > 2.0) return;
+	// FragColor = texture(blend3D, vec3(TexCoord.xy, coordZ));
+}`;
+var fragRGBOrientShader = `#line 773
+precision highp int;
+precision highp float;
+in vec2 TexCoord;
+out vec4 FragColor;
+uniform float coordZ;
+uniform float layer;
+uniform float scl_slope;
+uniform float scl_inter;
+uniform float cal_max;
+uniform float cal_min;
+uniform highp sampler2D colormap;
+uniform lowp sampler3D blend3D;
+uniform float opacity;
+uniform mat4 mtx;
+uniform bool hasAlpha;
+uniform int modulation;
+uniform highp sampler3D modulationVol;
+void main(void) {
+	vec4 vx = vec4(TexCoord.xy, coordZ, 1.0) * mtx;
+	uvec4 aColor = texture(intensityVol, vx.xyz);
+	FragColor = vec4(float(aColor.r) / 255.0, float(aColor.g) / 255.0, float(aColor.b) / 255.0, float(aColor.a) / 255.0);
+	if (modulation == 1)
+		FragColor.rgb *= texture(modulationVol, vx.xyz).r;
+	if (!hasAlpha) {
+		FragColor.a = (FragColor.r * 0.21 + FragColor.g * 0.72 + FragColor.b * 0.07);
+		//next line: we could binarize alpha, but see rendering of visible human
+		//FragColor.a = step(0.01, FragColor.a);
+	}
+	if (modulation == 2)
+		FragColor.a = texture(modulationVol, vx.xyz).r;
+	FragColor.a *= opacity;
+	if (layer < 1.0) return;
+	vec4 prevColor = texture(blend3D, vec3(TexCoord.xy, coordZ));
+	// https://en.wikipedia.org/wiki/Alpha_compositing
+	float aout = FragColor.a + (1.0 - FragColor.a) * prevColor.a;
+	if (aout <= 0.0) return;
+	FragColor.rgb = ((FragColor.rgb * FragColor.a) + (prevColor.rgb * prevColor.a * (1.0 - FragColor.a))) / aout;
+	FragColor.a = aout;
+}`;
+var vertGrowCutShader = `#version 300 es
+#line 808
+precision highp int;
+precision highp float;
+in vec3 vPos;
+out vec2 TexCoord;
+void main() {
+	TexCoord = vPos.xy;
+	gl_Position = vec4((vPos.x - 0.5) * 2.0, (vPos.y - 0.5) * 2.0, 0.0, 1.0);
+}`;
+var fragGrowCutShader = `#version 300 es
+#line 829
+	precision highp float;
+	precision highp int;
+	precision highp isampler3D;
+	layout(location = 0) out int label;
+	layout(location = 1) out int strength;
+	in vec2 TexCoord;
+	uniform int finalPass;
+	uniform float coordZ;
+	uniform lowp sampler3D in3D;
+	uniform highp isampler3D backTex; // background
+	uniform highp isampler3D labelTex; // label
+	uniform highp isampler3D strengthTex; // strength
+void main(void) {
+	vec3 interpolatedTextureCoordinate = vec3(TexCoord.xy, coordZ);
+	ivec3 size = textureSize(backTex, 0);
+	ivec3 texelIndex = ivec3(floor(interpolatedTextureCoordinate * vec3(size)));
+	int background = texelFetch(backTex, texelIndex, 0).r;
+	label = texelFetch(labelTex, texelIndex, 0).r;
+	strength = texelFetch(strengthTex, texelIndex, 0).r;
+	for (int k = -1; k <= 1; k++) {
+		for (int j = -1; j <= 1; j++) {
+			for (int i = -1; i <= 1; i++) {
+				if (i != 0 && j != 0 && k != 0) {
+					ivec3 neighborIndex = texelIndex + ivec3(i,j,k);
+					int neighborBackground = texelFetch(backTex, neighborIndex, 0).r;
+					int neighborStrength = texelFetch(strengthTex, neighborIndex, 0).r;
+					int strengthCost = abs(neighborBackground - background);
+					int takeoverStrength = neighborStrength - strengthCost;
+					if (takeoverStrength > strength) {
+						strength = takeoverStrength;
+						label = texelFetch(labelTex, neighborIndex, 0).r;
+					}
+				}
+			}
+		}
+	}
+	if (finalPass < 1)
+		return;
+	int ok = 1;
+	ivec4 labelCount = ivec4(0,0,0,0);
+	for (int k = -1; k <= 1; k++)
+		for (int j = -1; j <= 1; j++)
+			for (int i = -1; i <= 1; i++) {
+				ivec3 neighborIndex = texelIndex + ivec3(i,j,k);
+				int ilabel = texelFetch(labelTex, neighborIndex, 0).r;
+				if ((ilabel < 0) || (ilabel > 3))
+					ok = 0;
+				else
+					labelCount[ilabel]++;
+			}
+	if (ok != 1) {
+		return;
+	}
+	int maxIdx = 0;
+	for (int i = 1; i < 4; i++) {
+		if (labelCount[i] > labelCount[maxIdx])
+			maxIdx = i;
+	}
+	label = maxIdx;
+}`;
+var vertSurfaceShader = `#version 300 es
+layout(location=0) in vec3 pos;
+uniform mat4 mvpMtx;
+void main(void) {
+	gl_Position = mvpMtx * vec4(pos, 1.0);
+}`;
+var fragSurfaceShader = `#version 300 es
+precision highp int;
+precision highp float;
+uniform vec4 surfaceColor;
+out vec4 color;
+void main() {
+	color = surfaceColor;
+}`;
+var vertFiberShader = `#version 300 es
+layout(location=0) in vec3 pos;
+layout(location=1) in vec4 clr;
+out vec4 vClr;
+uniform mat4 mvpMtx;
+void main(void) {
+	gl_Position = mvpMtx * vec4(pos, 1.0);
+	vClr = clr;
+}`;
+var fragFiberShader = `#version 300 es
+precision highp int;
+precision highp float;
+in vec4 vClr;
+out vec4 color;
+uniform float opacity;
+void main() {
+	color = vec4(vClr.rgb, opacity);
+}`;
+var vertMeshShader = `#version 300 es
+layout(location=0) in vec3 pos;
+layout(location=1) in vec4 norm;
+layout(location=2) in vec4 clr;
+uniform mat4 mvpMtx;
+//uniform mat4 modelMtx;
+uniform mat4 normMtx;
+out vec4 vClr;
+out vec3 vN;
+out vec4 vP;
+out vec4 vPc;
+void main(void) {
+	vec3 lightPosition = vec3(0.0, 0.0, -10.0);
+	vP = vec4(pos, 1.0);
+	vPc = mvpMtx * vec4(pos, 1.0);
+	gl_Position = vPc;
+	vN = normalize((normMtx * vec4(norm.xyz,1.0)).xyz);
+	//vV = -vec3(modelMtx*vec4(pos,1.0));
+	vClr = clr;
+}`;
+var fragMeshDepthShader = `#version 300 es
+precision highp int;
+precision highp float;
+uniform float opacity;
+out vec4 color;
+vec4 packFloatToVec4i(const float value) {
+	const vec4 bitSh = vec4(256.0*256.0*256.0, 256.0*256.0, 256.0, 1.0);
+	const vec4 bitMsk = vec4(0.0, 1.0/256.0, 1.0/256.0, 1.0/256.0);
+	vec4 res = fract(value * bitSh);
+	res -= res.xxyz * bitMsk;
+	return res;
+}
+void main() {
+	color = packFloatToVec4i(gl_FragCoord.z);
+}`;
+var fragMeshToonShader = `#version 300 es
+precision highp int;
+precision highp float;
+uniform float opacity;
+in vec4 vClr;
+in vec3 vN;
+out vec4 color;
+float stepmix(float edge0, float edge1, float E, float x){
+	float T = clamp(0.5 * (x - edge0 + E) / E, 0.0, 1.0);
+	return mix(edge0, edge1, T);
+}
+void main() {
+	vec3 r = vec3(0.0, 0.0, 1.0);
+	float ambient = 0.3;
+	float diffuse = 0.6;
+	float specular = 0.5;
+	float shininess = 50.0;
+	vec3 n = normalize(vN);
+	vec3 lightPosition = vec3(0.0, 10.0, -5.0);
+	vec3 l = normalize(lightPosition);
+	float df = max(0.0, dot(n, l));
+	float sf = pow(max(dot(reflect(l, n), r), 0.0), shininess);
+	const float A = 0.1;
+	const float B = 0.3;
+	const float C = 0.6;
+	const float D = 1.0;
+	float E = fwidth(df);
+	if (df > A - E && df < A + E) df = stepmix(A, B, E, df);
+	else if (df > B - E && df < B + E) df = stepmix(B, C, E, df);
+	else if (df > C - E && df < C + E) df = stepmix(C, D, E, df);
+	else if (df < A) df = 0.0;
+	else if (df < B) df = B;
+	else if (df < C) df = C;
+	else df = D;
+	E = fwidth(sf);
+	if (sf > 0.5 - E && sf < 0.5 + E)
+		sf = smoothstep(0.5 - E, 0.5 + E, sf);
+	else
+		sf = step(0.5, sf);
+	vec3 a = vClr.rgb * ambient;
+	vec3 d = max(df, 0.0) * vClr.rgb * diffuse;
+	color.rgb = a + d + (specular * sf);
+	color.a = opacity;
+}`;
+var fragMeshOutlineShader = `#version 300 es
+precision highp int;
+precision highp float;
+uniform float opacity;
+in vec4 vClr;
+in vec3 vN;
+out vec4 color;
+void main() {
+	vec3 r = vec3(0.0, 0.0, 1.0); //rayDir: for orthographic projections moving in Z direction (no need for normal matrix)
+	float ambient = 0.3;
+	float diffuse = 0.6;
+	float specular = 0.25;
+	float shininess = 10.0;
+	float PenWidth = 0.6;
+	vec3 n = normalize(vN);
+	vec3 lightPosition = vec3(0.0, 10.0, -5.0);
+	vec3 l = normalize(lightPosition);
+	float lightNormDot = dot(n, l);
+	float view = abs(dot(n,r)); //with respect to viewer
+	if (PenWidth < view) discard;
+	vec3 a = vClr.rgb * ambient;
+	vec3 d = max(lightNormDot, 0.0) * vClr.rgb * diffuse;
+	float s = specular * pow(max(dot(reflect(l, n), r), 0.0), shininess);
+	color.rgb = a + d + s;
+	color.a = opacity;
+}`;
+var fragMeshRimShader = `#version 300 es
+precision highp int;
+precision highp float;
+uniform float opacity;
+in vec4 vClr;
+in vec3 vN;
+out vec4 color;
+void main() {
+	const float thresh = 0.4;
+	const vec3 viewDir = vec3(0.0, 0.0, -1.0);
+	vec3 n = normalize(vN);
+	// use abs() for two-sided lighting, max() for one sided
+	float cosTheta = abs(dot(n, viewDir));
+	// float cosTheta = max(dot(n, viewDir), 0.0);
+	// optional fresnel equation - adjust exponent
+	// cosTheta = 1.0 - pow(1.0 - cosTheta, 2.0);
+	// use step for binary edges, smoothstep for feathered edges
+	// vec3 d = step(thresh, cosTheta) * vClr.rgb;
+	vec3 d = smoothstep(thresh - 0.05, thresh + 0.05, cosTheta) * vClr.rgb;
+	color = vec4(d, opacity);
+}`;
+var fragMeshContourShader = `#version 300 es
+precision highp int;
+precision highp float;
+uniform float opacity;
+in vec4 vClr;
+in vec3 vN;
+out vec4 color;
+void main() {
+  const float edge0 = 0.1;
+  const float edge1 = 0.25;
+  const vec3 viewDir = vec3(0.0, 0.0, -1.0);
+  vec3 n = normalize(vN);
+  float cosTheta = abs(dot(n, viewDir));
+  float alpha = 1.0 - smoothstep(edge0, edge1, cosTheta);
+  if (alpha <= 0.0) {
+    discard;
+  }
+  color = vec4(0.0, 0.0, 0.0, opacity * alpha);
+}`;
+var fragMeshEdgeShader = `#version 300 es
+precision highp int;
+precision highp float;
+uniform float opacity;
+in vec4 vClr;
+in vec3 vN;
+out vec4 color;
+void main() {
+	vec3 r = vec3(0.0, 0.0, 1.0); //rayDir: for orthographic projections moving in Z direction (no need for normal matrix)
+	float diffuse = 1.0;
+	float specular = 0.2;
+	float shininess = 10.0;
+	vec3 n = normalize(vN);
+	vec3 lightPosition = vec3(0.0, 0.0, -5.0);
+	vec3 l = normalize(lightPosition);
+	float lightNormDot = max(dot(n, l), 0.0);
+	vec3 d = lightNormDot * vClr.rgb * diffuse;
+	float s = specular * pow(max(dot(reflect(l, n), r), 0.0), shininess);
+	color = vec4(d + s, opacity);
+}`;
+var fragMeshDiffuseEdgeShader = `#version 300 es
+precision highp int;
+precision highp float;
+uniform float opacity;
+in vec4 vClr;
+in vec3 vN;
+out vec4 color;
+void main() {
+	float diffuse = 1.4;
+	vec3 l = vec3(0.0, 0.0, -1.0);
+	float lightNormDot = max(dot(normalize(vN), l), 0.0);
+	color = vec4(lightNormDot * vClr.rgb * diffuse, opacity);
+}`;
+var fragMeshSpecularEdgeShader = `#version 300 es
+precision highp int;
+precision highp float;
+uniform float opacity;
+in vec4 vClr;
+in vec3 vN;
+out vec4 color;
+void main() {
+	float specularRGB = 0.7;
+	float specularWhite = 0.3;
+	float shininess = 10.0;
+	float diffuse = 1.0;
+	vec3 r = vec3(0.0, 0.0, 1.0); //rayDir: for orthographic projections moving in Z direction (no need for normal matrix)
+	vec3 n = normalize(vN);
+	vec3 l = vec3(0.0, 0.0, -1.0);
+	float lightNormDot = max(dot(n, l), 0.0);
+	vec3 d3 = lightNormDot * vClr.rgb * diffuse;
+	float s = pow(max(dot(reflect(l, n), r), 0.0), shininess);
+	vec3 s3 = specularRGB * s * vClr.rgb;
+	s *= specularWhite;
+	color = vec4(d3 + s3 + s, opacity);
+}`;
+var fragMeshShaderCrevice = `#version 300 es
+precision highp int;
+precision highp float;
+uniform float opacity;
+in vec4 vClr;
+in vec3 vN;
+in vec4 vPc;
+out vec4 color;
+void main() {
+	vec3 n = normalize(vN);
+	// Compute curvature
+	vec3 dx = dFdx(n);
+	vec3 dy = dFdy(n);
+	vec3 xneg = n - dx;
+	vec3 xpos = n + dx;
+	vec3 yneg = n - dy;
+	vec3 ypos = n + dy;
+	float depth = length(vPc.xyz);
+	float curv = (cross(xneg, xpos).y - cross(yneg, ypos).x) / depth;
+	//at this stage 0.5 for flat, with valleys dark and ridges bright
+	curv = 1.0 - (curv + 0.5);
+	//clamp
+	curv =  min(max(curv, 0.0), 1.0);
+	// easing function
+	curv = pow(curv, 0.5);
+	//modulate ambient and diffuse with curvature
+	vec3 r = vec3(0.0, 0.0, 1.0); //rayDir: for orthographic projections moving in Z direction (no need for normal matrix)
+	float ambient = 0.6;
+	float diffuse = 0.6;
+	float specular = 0.2;
+	float shininess = 10.0;
+	vec3 lightPosition = vec3(0.0, 10.0, -2.0);
+	vec3 l = normalize(lightPosition);
+	float lightNormDot = dot(n, l);
+	vec3 a = vClr.rgb * ambient * curv;
+	vec3 d = max(lightNormDot, 0.0) * vClr.rgb * diffuse;
+	float s = specular * pow(max(dot(reflect(l, n), r), 0.0), shininess);
+	color = vec4(a + d + s, opacity);
+}`;
+var fragMeshShader = `#version 300 es
+precision highp int;
+precision highp float;
+uniform float opacity;
+in vec4 vClr;
+in vec3 vN;
+out vec4 color;
+void main() {
+	vec3 r = vec3(0.0, 0.0, 1.0); //rayDir: for orthographic projections moving in Z direction (no need for normal matrix)
+	float ambient = 0.35;
+	float diffuse = 0.5;
+	float specular = 0.2;
+	float shininess = 10.0;
+	vec3 n = normalize(vN);
+	vec3 lightPosition = vec3(0.0, 10.0, -5.0);
+	vec3 l = normalize(lightPosition);
+	float lightNormDot = dot(n, l);
+	vec3 a = vClr.rgb * ambient;
+	vec3 d = max(lightNormDot, 0.0) * vClr.rgb * diffuse;
+	float s = specular * pow(max(dot(reflect(l, n), r), 0.0), shininess);
+	color = vec4(a + d + s, opacity);
+}`;
+var fragMeshMatcapShader = `#version 300 es
+precision highp int;
+precision highp float;
+uniform float opacity;
+in vec4 vClr;
+in vec3 vN;
+uniform sampler2D matCap;
+out vec4 color;
+void main() {
+	vec3 n = normalize(vN);
+	vec2 uv = n.xy * 0.5 + 0.5;
+	uv.y = 1.0 - uv.y;
+	vec3 clr = texture(matCap,uv.xy).rgb * vClr.rgb;
+	color = vec4(clr, opacity);
+}`;
+var fragMeshMatteShader = `#version 300 es
+precision highp int;
+precision highp float;
+uniform float opacity;
+in vec4 vClr;
+in vec3 vN;
+out vec4 color;
+void main() {
+	float ambient = 0.35;
+	float diffuse = 0.6;
+	vec3 n = normalize(vN);
+	vec3 lightPosition = vec3(0.0, 10.0, -5.0);
+	vec3 l = normalize(lightPosition);
+	float lightNormDot = dot(n, l);
+	vec3 a = vClr.rgb * ambient;
+	vec3 d = max(lightNormDot, 0.0) * vClr.rgb * diffuse;
+	color = vec4(a + d, opacity);
+}`;
+var fragMeshHemiShader = `#version 300 es
+precision highp int;
+precision highp float;
+uniform float opacity;
+in vec4 vClr;
+in vec3 vN;
+out vec4 color;
+void main() {
+	vec3 r = vec3(0.0, 0.0, 1.0); //rayDir: for orthographic projections moving in Z direction (no need for normal matrix)
+	float ambient = 0.35;
+	float diffuse = 0.5;
+	float specular = 0.2;
+	float shininess = 10.0;
+	vec3 n = normalize(vN);
+	vec3 lightPosition = vec3(0.0, 10.0, -5.0);
+	vec3 l = normalize(lightPosition);
+	float lightNormDot = dot(n, l);
+	vec3 up = vec3(0.0, 1.0, 0.0);
+	float ax = dot(n, up) * 0.5 + 0.5;  //Shreiner et al. (2013) OpenGL Programming Guide, 8th Ed., p 388. ISBN-10: 0321773039
+	vec3 upClr = vec3(1.0, 1.0, 0.95);
+	vec3 downClr = vec3(0.4, 0.4, 0.6);
+	vec3 a = vClr.rgb * ambient;
+	a *= mix(downClr, upClr, ax);
+	vec3 d = max(lightNormDot, 0.0) * vClr.rgb * diffuse;
+	float s = specular * pow(max(dot(reflect(l, n), r), 0.0), shininess);
+	color = vec4(a + d + s, opacity);
+}`;
+var fragMeshShaderSHBlue = `#version 300 es
+precision highp int;
+precision highp float;
+uniform float opacity;
+in vec4 vClr;
+in vec3 vN;
+out vec4 color;
+//Spherical harmonics constants
+const float C1 = 0.429043;
+const float C2 = 0.511664;
+const float C3 = 0.743125;
+const float C4 = 0.886227;
+const float C5 = 0.247708;
+//Spherical harmonics coefficients
+// Ramamoorthi, R., and P. Hanrahan. 2001b. "An Efficient Representation for Irradiance Environment Maps." In Proceedings of SIGGRAPH 2001, pp. 497\u2013500.
+// https://github.com/eskimoblood/processingSketches/blob/master/data/shader/shinyvert.glsl
+// https://github.com/eskimoblood/processingSketches/blob/master/data/shader/shinyvert.glsl
+// Constants for Eucalyptus Grove lighting
+const vec3 L00  = vec3( 0.3783264,  0.4260425,  0.4504587);
+const vec3 L1m1 = vec3( 0.2887813,  0.3586803,  0.4147053);
+const vec3 L10  = vec3( 0.0379030,  0.0295216,  0.0098567);
+const vec3 L11  = vec3(-0.1033028, -0.1031690, -0.0884924);
+const vec3 L2m2 = vec3(-0.0621750, -0.0554432, -0.0396779);
+const vec3 L2m1 = vec3( 0.0077820, -0.0148312, -0.0471301);
+const vec3 L20  = vec3(-0.0935561, -0.1254260, -0.1525629);
+const vec3 L21  = vec3(-0.0572703, -0.0502192, -0.0363410);
+const vec3 L22  = vec3( 0.0203348, -0.0044201, -0.0452180);
+vec3 SH(vec3 vNormal) {
+	vNormal = vec3(vNormal.x,vNormal.z,vNormal.y);
+	vec3 diffuseColor = C1 * L22 * (vNormal.x * vNormal.x - vNormal.y * vNormal.y) +
+	C3 * L20 * vNormal.z * vNormal.z +
+	C4 * L00 -
+	C5 * L20 +
+	2.0 * C1 * L2m2 * vNormal.x * vNormal.y +
+	2.0 * C1 * L21  * vNormal.x * vNormal.z +
+	2.0 * C1 * L2m1 * vNormal.y * vNormal.z +
+	2.0 * C2 * L11  * vNormal.x +
+	2.0 * C2 * L1m1 * vNormal.y +
+	2.0 * C2 * L10  * vNormal.z;
+	return diffuseColor;
+}
+void main() {
+	vec3 r = vec3(0.0, 0.0, 1.0); //rayDir: for orthographic projections moving in Z direction (no need for normal matrix)
+	float ambient = 0.3;
+	float diffuse = 0.6;
+	float specular = 0.1;
+	float shininess = 10.0;
+	vec3 n = normalize(vN);
+	vec3 lightPosition = vec3(0.0, 10.0, -5.0);
+	vec3 l = normalize(lightPosition);
+	float s = specular * pow(max(dot(reflect(l, n), r), 0.0), shininess);
+	vec3 a = vClr.rgb * ambient;
+	vec3 d = vClr.rgb * diffuse * SH(-reflect(n, vec3(l.x, l.y, -l.z)) );
+	color = vec4(a + d + s, opacity);
+}`;
+var vertFlatMeshShader = `#version 300 es
+layout(location=0) in vec3 pos;
+layout(location=1) in vec4 norm;
+layout(location=2) in vec4 clr;
+uniform mat4 mvpMtx;
+//uniform mat4 modelMtx;
+uniform mat4 normMtx;
+out vec4 vClr;
+flat out vec3 vN;
+void main(void) {
+	gl_Position = mvpMtx * vec4(pos, 1.0);
+	vN = normalize((normMtx * vec4(norm.xyz,1.0)).xyz);
+	//vV = -vec3(modelMtx*vec4(pos,1.0));
+	vClr = clr;
+}`;
+var fragFlatMeshShader = `#version 300 es
+precision highp int;
+precision highp float;
+uniform float opacity;
+in vec4 vClr;
+flat in vec3 vN;
+out vec4 color;
+void main() {
+	vec3 r = vec3(0.0, 0.0, 1.0); //rayDir: for orthographic projections moving in Z direction (no need for normal matrix)
+	float ambient = 0.35;
+	float diffuse = 0.5;
+	float specular = 0.2;
+	float shininess = 10.0;
+	vec3 n = normalize(vN);
+	vec3 lightPosition = vec3(0.0, 10.0, -5.0);
+	vec3 l = normalize(lightPosition);
+	float lightNormDot = dot(n, l);
+	vec3 a = vClr.rgb * ambient;
+	vec3 d = max(lightNormDot, 0.0) * vClr.rgb * diffuse;
+	float s = specular * pow(max(dot(reflect(l, n), r), 0.0), shininess);
+	color = vec4(a + d + s, opacity);
+}`;
+var fragVolumePickingShader = `#version 300 es
+#line 1260
+//precision highp int;
+precision highp float;
+uniform vec3 rayDir;
+uniform vec3 volScale;
+uniform vec3 texVox;
+uniform vec4 clipPlane;
+uniform highp sampler3D volume, overlay;
+uniform highp sampler3D paqd;
+uniform vec4 paqdUniforms;
+uniform float overlays;
+uniform float clipThick;
+uniform vec3 clipLo;
+uniform vec3 clipHi;
+uniform mat4 matRAS;
+uniform mat4 mvpMtx;
+uniform float drawOpacity, renderOverlayBlend;
+uniform highp sampler3D drawing;
+uniform highp sampler2D colormap;
+uniform int backgroundMasksOverlays;
+in vec3 vColor;
+out vec4 fColor;
+` + kRenderFunc + `
+void main() {
+	int id = 254;
+	vec3 start = vColor;
+	gl_FragDepth = 0.0;
+	fColor = vec4(0.0, 0.0, 0.0, 0.0); //assume no hit: ID = 0
+	float fid = float(id & 255)/ 255.0;
+	vec3 backPosition = GetBackPosition(start);
+	vec3 dir = normalize(backPosition - start);
+	clipVolumeStart(start, backPosition);
+	float len = length(backPosition - start);
+	float lenVox = length((texVox * start) - (texVox * backPosition));
+	if ((lenVox < 0.5) || (len > 3.0)) return;//discard; //length limit for parallel rays
+	float sliceSize = len / lenVox; //e.g. if ray length is 1.0 and traverses 50 voxels, each voxel is 0.02 in unit cube
+	float stepSize = sliceSize; //quality: larger step is faster traversal, but fewer samples
+	float opacityCorrection = stepSize/sliceSize;
+	dir = normalize(dir);
+	vec4 samplePos = vec4(start.xyz, 0.0); //ray position
+	float lenNoClip = len;
+	bool isClip = false;
+	vec4 clipPos = applyClip(dir, samplePos, len, isClip);
+	if (isClip) fColor = vec4(samplePos.xyz, 253.0 / 255.0); //assume no hit: ID = 0
+	//start: OPTIONAL fast pass: rapid traversal until first hit
+	float stepSizeFast = sliceSize * 1.9;
+	vec4 deltaDirFast = vec4(dir.xyz * stepSizeFast, stepSizeFast);
+	while (samplePos.a <= len) {
+		float val = texture(volume, samplePos.xyz).a;
+		if (val > 0.01) {
+			fColor = vec4(samplePos.rgb, fid);
+			gl_FragDepth = frac2ndc(samplePos.xyz);
+			break;
+		}
+		samplePos += deltaDirFast; //advance ray position
+	}
+	//end: fast pass
+	if ((overlays < 1.0) || (backgroundMasksOverlays > 0)) {
+		return; //background hit, no overlays
+	}
+	//overlay pass
+	len = min(lenNoClip, samplePos.a); //only find overlay closer than background
+	samplePos = vec4(start.xyz, 0.0); //ray position
+	while (samplePos.a <= len) {
+		float val = texture(overlay, samplePos.xyz).a;
+		if (val > 0.01) {
+			fColor = vec4(samplePos.rgb, fid);
+			gl_FragDepth = frac2ndc(samplePos.xyz);
+			return;
+		}
+		samplePos += deltaDirFast; //advance ray position
+	}
+	//if (fColor.a == 0.0) discard; //no hit in either background or overlays
+	//you only get here if there is a hit with the background that is closer than any overlay
+}`;
+var vertOrientCubeShader = `#version 300 es
+// an attribute is an input (in) to a vertex shader.
+// It will receive data from a buffer
+layout(location=0)  in vec3 a_position;
+layout(location=1)  in vec3 a_color;
+// A matrix to transform the positions by
+uniform mat4 u_matrix;
+out vec3 vColor;
+// all shaders have a main function
+void main() {
+	// Multiply the position by the matrix.
+	vec4 pos = vec4(a_position, 1.0);
+	gl_Position = u_matrix * vec4(pos);
+	vColor = a_color;
+}
+`;
+var fragOrientCubeShader = `#version 300 es
+precision highp float;
+uniform vec4 u_color;
+in vec3 vColor;
+out vec4 outColor;
+void main() {
+	outColor = vec4(vColor, 1.0);
+}`;
+var vertPassThroughShader = `#version 300 es
+#line 1359
+precision highp int;
+precision highp float;
+in vec3 vPos;
+out vec2 TexCoord;
+void main() {
+	TexCoord = vPos.xy;
+	vec2 viewCoord = (vPos.xy - 0.5) * 2.0;
+	gl_Position = vec4((vPos.xy - 0.5) * 2.0, 0.0, 1.0);
+}`;
+var fragPassThroughShader = `#version 300 es
+precision highp int;
+precision highp float;
+in vec2 TexCoord;
+out vec4 FragColor;
+uniform float coordZ;
+uniform lowp sampler3D in3D;
+void main(void) {
+ FragColor = texture(in3D, vec3(TexCoord.xy, coordZ));
+}`;
+var blurVertShader = `#version 300 es
+#line 286
+precision highp int;
+precision highp float;
+in vec3 vPos;
+out vec2 TexCoord;
+void main() {
+    TexCoord = vPos.xy;
+    gl_Position = vec4( (vPos.xy-vec2(0.5,0.5))* 2.0, 0.0, 1.0);
+}`;
+var blurFragShader = `#version 300 es
+#line 298
+precision highp int;
+precision highp float;
+in vec2 TexCoord;
+out vec4 FragColor;
+uniform float coordZ;
+uniform float dX;
+uniform float dY;
+uniform float dZ;
+uniform highp sampler3D intensityVol;
+void main(void) {
+ vec3 vx = vec3(TexCoord.xy, coordZ);
+ vec4 samp = texture(intensityVol,vx+vec3(+dX,+dY,+dZ));
+ samp += texture(intensityVol,vx+vec3(+dX,+dY,-dZ));
+ samp += texture(intensityVol,vx+vec3(+dX,-dY,+dZ));
+ samp += texture(intensityVol,vx+vec3(+dX,-dY,-dZ));
+ samp += texture(intensityVol,vx+vec3(-dX,+dY,+dZ));
+ samp += texture(intensityVol,vx+vec3(-dX,+dY,-dZ));
+ samp += texture(intensityVol,vx+vec3(-dX,-dY,+dZ));
+ samp += texture(intensityVol,vx+vec3(-dX,-dY,-dZ));
+ FragColor = samp*0.125;
+}`;
+var sobelBlurFragShader = `#version 300 es
+#line 298
+precision highp int;
+precision highp float;
+in vec2 TexCoord;
+out vec4 FragColor;
+uniform float coordZ;
+uniform float dX;
+uniform float dY;
+uniform float dZ;
+uniform highp sampler3D intensityVol;
+void main(void) {
+ vec3 vx = vec3(TexCoord.xy, coordZ);
+ vec4 XYZ = texture(intensityVol,vx+vec3(+dX,+dY,+dZ));
+ vec4 OYZ = texture(intensityVol,vx+vec3(0.0,+dY,+dZ));
+ vec4 xYZ = texture(intensityVol,vx+vec3(-dX,+dY,+dZ));
+ vec4 XOZ = texture(intensityVol,vx+vec3(+dX,0.0,+dZ));
+ vec4 OOZ = texture(intensityVol,vx+vec3(0.0,0.0,+dZ));
+ vec4 xOZ = texture(intensityVol,vx+vec3(-dX,0.0,+dZ));
+ vec4 XyZ = texture(intensityVol,vx+vec3(+dX,-dY,+dZ));
+ vec4 OyZ = texture(intensityVol,vx+vec3(0.0,-dY,+dZ));
+ vec4 xyZ = texture(intensityVol,vx+vec3(-dX,-dY,+dZ));
+
+ vec4 XYO = texture(intensityVol,vx+vec3(+dX,+dY,0.0));
+ vec4 OYO = texture(intensityVol,vx+vec3(0.0,+dY,0.0));
+ vec4 xYO = texture(intensityVol,vx+vec3(-dX,+dY,0.0));
+ vec4 XOO = texture(intensityVol,vx+vec3(+dX,0.0,0.0));
+ vec4 OOO = texture(intensityVol,vx+vec3(0.0,0.0,0.0));
+ vec4 xOO = texture(intensityVol,vx+vec3(-dX,0.0,0.0));
+ vec4 XyO = texture(intensityVol,vx+vec3(+dX,-dY,0.0));
+ vec4 OyO = texture(intensityVol,vx+vec3(0.0,-dY,0.0));
+ vec4 xyO = texture(intensityVol,vx+vec3(-dX,-dY,0.0));
+
+ vec4 XYz = texture(intensityVol,vx+vec3(+dX,+dY,-dZ));
+ vec4 OYz = texture(intensityVol,vx+vec3(0.0,+dY,-dZ));
+ vec4 xYz = texture(intensityVol,vx+vec3(-dX,+dY,-dZ));
+ vec4 XOz = texture(intensityVol,vx+vec3(+dX,0.0,-dZ));
+ vec4 OOz = texture(intensityVol,vx+vec3(0.0,0.0,-dZ));
+ vec4 xOz = texture(intensityVol,vx+vec3(-dX,0.0,-dZ));
+ vec4 Xyz = texture(intensityVol,vx+vec3(+dX,-dY,-dZ));
+ vec4 Oyz = texture(intensityVol,vx+vec3(0.0,-dY,-dZ));
+ vec4 xyz = texture(intensityVol,vx+vec3(-dX,-dY,-dZ));
+
+ vec4 blurred = vec4 (0.0, 0.0, 0.0, 0.0);
+ blurred.r = 2.0*(xOz.r +xOZ.r +xyO.r +xYO.r +xOO.r +XOz.r +XOZ.r +XyO.r +XYO.r +XOO.r) +xyz.r +xyZ.r +xYz.r +xYZ.r +Xyz.r +XyZ.r +XYz.r +XYZ.r;
+ blurred.g = 2.0*(Oyz.r +OyZ.r +xyO.r +XyO.r +OyO.r +OYz.r +OYZ.r +xYO.r +XYO.r +OYO.r) +xyz.r +Xyz.r +xyZ.r +XyZ.r +xYz.r +XYz.r +xYZ.r +XYZ.r;
+ blurred.b = 2.0*(Oyz.r +OYz.r +xOz.r +XOz.r +OOz.r +OyZ.r +OYZ.r +xOZ.r +XOZ.r +OOZ.r) +xyz.r +Xyz.r +xYz.r +XYz.r +xyZ.r +XyZ.r +XyZ.r +XYZ.r;
+ blurred.a = 0.32*(abs(blurred.r)+abs(blurred.g)+abs(blurred.b));
+ // 0.0357 = 1/28 to account for weights, rescale to 2**16,
+ FragColor = 0.0357*blurred;
+}`;
+var kGradientMagnitude = `
+  gradientSample.a = log2(gradientSample.r*gradientSample.r + gradientSample.g*gradientSample.g + gradientSample.b*gradientSample.b + 1.922337562475971e-06) + 18.988706873717717;
+`;
+var sobelFirstOrderFragShader = `#version 300 es
+#line 323
+precision highp int;
+precision highp float;
+in vec2 TexCoord;
+out vec4 FragColor;
+uniform float coordZ;
+uniform float dX;
+uniform float dY;
+uniform float dZ;
+uniform highp sampler3D intensityVol;
+void main(void) {
+  vec3 vx = vec3(TexCoord.xy, coordZ);
+  //Neighboring voxels 'T'op/'B'ottom, 'A'nterior/'P'osterior, 'R'ight/'L'eft
+  float TAR = texture(intensityVol,vx+vec3(+dX,+dY,+dZ)).r;
+  float TAL = texture(intensityVol,vx+vec3(+dX,+dY,-dZ)).r;
+  float TPR = texture(intensityVol,vx+vec3(+dX,-dY,+dZ)).r;
+  float TPL = texture(intensityVol,vx+vec3(+dX,-dY,-dZ)).r;
+  float BAR = texture(intensityVol,vx+vec3(-dX,+dY,+dZ)).r;
+  float BAL = texture(intensityVol,vx+vec3(-dX,+dY,-dZ)).r;
+  float BPR = texture(intensityVol,vx+vec3(-dX,-dY,+dZ)).r;
+  float BPL = texture(intensityVol,vx+vec3(-dX,-dY,-dZ)).r;
+  vec4 gradientSample = vec4 (0.0, 0.0, 0.0, 0.0);
+  gradientSample.r = BAR+BAL+BPR+BPL -TAR-TAL-TPR-TPL;
+  gradientSample.g = TPR+TPL+BPR+BPL -TAR-TAL-BAR-BAL;
+  gradientSample.b = TAL+TPL+BAL+BPL -TAR-TPR-BAR-BPR;
+${kGradientMagnitude}
+	// 0.04242020977371934 = 1/(log2(3*8) - log2(1/(255**2*8))) // 3*8 -> max for 1st order gradient
+	gradientSample.a *= 0.04242020977371934;
+  gradientSample.rgb = normalize(gradientSample.rgb);
+  gradientSample.rgb = (gradientSample.rgb * 0.5)+0.5;
+  FragColor = gradientSample;
+}`;
+var sobelSecondOrderFragShader = `#version 300 es
+#line 323
+precision highp int;
+precision highp float;
+in vec2 TexCoord;
+out vec4 FragColor;
+uniform float coordZ;
+uniform float dX;
+uniform float dY;
+uniform float dZ;
+uniform float dX2;
+uniform float dY2;
+uniform float dZ2;
+uniform highp sampler3D intensityVol;
+void main(void) {
+  vec3 vx = vec3(TexCoord.xy, coordZ);
+  //Neighboring voxels 'T'op/'B'ottom, 'A'nterior/'P'osterior, 'R'ight/'L'eft
+  vec4 TAR = texture(intensityVol,vx+vec3(+dX,+dY,+dZ));
+  vec4 TAL = texture(intensityVol,vx+vec3(+dX,+dY,-dZ));
+  vec4 TPR = texture(intensityVol,vx+vec3(+dX,-dY,+dZ));
+  vec4 TPL = texture(intensityVol,vx+vec3(+dX,-dY,-dZ));
+  vec4 BAR = texture(intensityVol,vx+vec3(-dX,+dY,+dZ));
+  vec4 BAL = texture(intensityVol,vx+vec3(-dX,+dY,-dZ));
+  vec4 BPR = texture(intensityVol,vx+vec3(-dX,-dY,+dZ));
+  vec4 BPL = texture(intensityVol,vx+vec3(-dX,-dY,-dZ));
+  vec4 T = texture(intensityVol,vx+vec3(+dX2,0.0,0.0));
+  vec4 A = texture(intensityVol,vx+vec3(0.0,+dY2,0.0));
+  vec4 R = texture(intensityVol,vx+vec3(0.0,0.0,+dZ2));
+  vec4 B = texture(intensityVol,vx+vec3(-dX2,0.0,0.0));
+  vec4 P = texture(intensityVol,vx+vec3(0.0,-dY2,0.0));
+  vec4 L = texture(intensityVol,vx+vec3(0.0,0.0,-dZ2));
+  vec4 gradientSample = vec4 (0.0, 0.0, 0.0, 0.0);
+  gradientSample.r = -4.0*B.r +8.0*(BAR.r+BAL.r+BPR.r+BPL.r) -8.0*(TAR.r+TAL.r+TPR.r+TPL.r) +4.0*T.r;
+  gradientSample.g = -4.0*P.g +8.0*(TPR.g+TPL.g+BPR.g+BPL.g) -8.0*(TAR.g+TAL.g+BAR.g+BAL.g) +4.0*A.g;
+  gradientSample.b = -4.0*L.b +8.0*(TAL.b+TPL.b+BAL.b+BPL.b) -8.0*(TAR.b+TPR.b+BAR.b+BPR.b) +4.0*R.b;
+${kGradientMagnitude}
+	gradientSample.a *= 0.0325;
+  gradientSample.rgb = normalize(gradientSample.rgb);
+  gradientSample.rgb =  (gradientSample.rgb * 0.5)+0.5;
+  FragColor = gradientSample;
+}`;
+
+// src/shader.ts
+var compileShader = function(gl, vert, frag) {
+  const vs = gl.createShader(gl.VERTEX_SHADER);
+  gl.shaderSource(vs, vert);
+  gl.compileShader(vs);
+  const fs = gl.createShader(gl.FRAGMENT_SHADER);
+  gl.shaderSource(fs, frag);
+  gl.compileShader(fs);
+  const program = gl.createProgram();
+  gl.attachShader(program, vs);
+  gl.attachShader(program, fs);
+  gl.linkProgram(program);
+  if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    console.log(gl.getProgramInfoLog(program));
+    if (!gl.getShaderParameter(vs, gl.COMPILE_STATUS)) {
+      console.log("Vertex shader compilation error:", gl.getShaderInfoLog(vs));
+    }
+    if (!gl.getShaderParameter(fs, gl.COMPILE_STATUS)) {
+      console.log("Fragment shader compilation error:", gl.getShaderInfoLog(fs));
+    }
+    log.error(gl.getProgramInfoLog(program));
+    throw new Error("Shader failed to link, see console for log");
+  }
+  return program;
+};
+var Shader = class {
+  constructor(gl, vertexSrc, fragmentSrc) {
+    __publicField(this, "program");
+    __publicField(this, "uniforms", {});
+    __publicField(this, "isMatcap");
+    this.program = compileShader(gl, vertexSrc, fragmentSrc);
+    const regexUniform = /uniform[^;]+[ ](\w+);/g;
+    const matchUniformName = /uniform[^;]+[ ](\w+);/;
+    const vertexUnifs = vertexSrc.match(regexUniform);
+    const fragUnifs = fragmentSrc.match(regexUniform);
+    if (vertexUnifs) {
+      vertexUnifs.forEach((unif) => {
+        const m = unif.match(matchUniformName);
+        this.uniforms[m[1]] = -1;
+      });
+    }
+    if (fragUnifs) {
+      fragUnifs.forEach((unif) => {
+        const m = unif.match(matchUniformName);
+        this.uniforms[m[1]] = -1;
+      });
+    }
+    for (const unif in this.uniforms) {
+      this.uniforms[unif] = gl.getUniformLocation(this.program, unif);
+    }
+  }
+  use(gl) {
+    gl.useProgram(this.program);
+  }
+};
+
+// src/utils/nice.ts
+var nice = (x, round4) => {
+  const exp = Math.floor(Math.log(x) / Math.log(10));
+  const f = x / Math.pow(10, exp);
+  let nf;
+  if (round4) {
+    if (f < 1.5) {
+      nf = 1;
+    } else if (f < 3) {
+      nf = 2;
+    } else if (f < 7) {
+      nf = 5;
+    } else {
+      nf = 10;
+    }
+  } else {
+    if (f <= 1) {
+      nf = 1;
+    } else if (f <= 2) {
+      nf = 2;
+    } else if (f <= 5) {
+      nf = 5;
+    } else {
+      nf = 10;
+    }
+  }
+  return nf * Math.pow(10, exp);
+};
+
+// src/utils/file-utils.ts
 function readFileAsDataURL(input) {
   return new Promise((resolve2, reject) => {
     let filePromise;
@@ -34478,6 +35034,8 @@ function readFileAsDataURL(input) {
     }).catch((err2) => reject(err2));
   });
 }
+
+// src/utils/image-utils.ts
 function img2ras16(volume) {
   const dims = volume.hdr.dims;
   const perm = volume.permRAS;
@@ -34540,33 +35098,18 @@ function img2ras16(volume) {
   }
   return img16;
 }
-function nice(x, round4) {
-  const exp = Math.floor(Math.log(x) / Math.log(10));
-  const f = x / Math.pow(10, exp);
-  let nf;
-  if (round4) {
-    if (f < 1.5) {
-      nf = 1;
-    } else if (f < 3) {
-      nf = 2;
-    } else if (f < 7) {
-      nf = 5;
-    } else {
-      nf = 10;
-    }
-  } else {
-    if (f <= 1) {
-      nf = 1;
-    } else if (f <= 2) {
-      nf = 2;
-    } else if (f <= 5) {
-      nf = 5;
-    } else {
-      nf = 10;
-    }
-  }
-  return nf * Math.pow(10, exp);
+function unpackFloatFromVec4i(val) {
+  const bitSh = [1 / (256 * 256 * 256), 1 / (256 * 256), 1 / 256, 1];
+  return (val[0] * bitSh[0] + val[1] * bitSh[1] + val[2] * bitSh[2] + val[3] * bitSh[3]) / 255;
 }
+function intensityRaw2Scaled(hdr, raw) {
+  if (hdr.scl_slope === 0) {
+    hdr.scl_slope = 1;
+  }
+  return raw * hdr.scl_slope + hdr.scl_inter;
+}
+
+// src/utils/math-utils.ts
 function loose_label(min4, max5, ntick = 4) {
   const range2 = nice(max5 - min4, false);
   const d = nice(range2 / (ntick - 1), true);
@@ -34607,6 +35150,11 @@ function negMinMax(min4, max5, minNeg, maxNeg) {
   }
   return [mn, mx];
 }
+function clamp(value, min4, max5) {
+  return Math.min(Math.max(value, min4), max5);
+}
+
+// src/utils/webgl-utils.ts
 function swizzleVec3(vec, order = [0, 1, 2]) {
   const vout = vec3_exports.create();
   vout[0] = vec[order[0]];
@@ -34636,89 +35184,6 @@ function unProject(winX, winY, winZ, mvpMatrix) {
   out[1] /= out[3];
   out[2] /= out[3];
   return out;
-}
-function unpackFloatFromVec4i(val) {
-  const bitSh = [1 / (256 * 256 * 256), 1 / (256 * 256), 1 / 256, 1];
-  return (val[0] * bitSh[0] + val[1] * bitSh[1] + val[2] * bitSh[2] + val[3] * bitSh[3]) / 255;
-}
-function clamp(value, min4, max5) {
-  return Math.min(Math.max(value, min4), max5);
-}
-function encodeRLE(data) {
-  const dl = data.length;
-  let dp = 0;
-  const r = new Uint8Array(dl + Math.ceil(0.01 * dl));
-  const rI = new Int8Array(r.buffer);
-  let rp = 0;
-  while (dp < dl) {
-    let v = data[dp];
-    dp++;
-    let rl = 1;
-    while (rl < 129 && dp < dl && data[dp] === v) {
-      dp++;
-      rl++;
-    }
-    if (rl > 1) {
-      rI[rp] = -rl + 1;
-      rp++;
-      r[rp] = v;
-      rp++;
-      continue;
-    }
-    while (dp < dl) {
-      if (rl > 127) {
-        break;
-      }
-      if (dp + 2 < dl) {
-        if (v !== data[dp] && data[dp + 2] === data[dp] && data[dp + 1] === data[dp]) {
-          break;
-        }
-      }
-      v = data[dp];
-      dp++;
-      rl++;
-    }
-    r[rp] = rl - 1;
-    rp++;
-    for (let i = 0; i < rl; i++) {
-      r[rp] = data[dp - rl + i];
-      rp++;
-    }
-  }
-  log.info("PackBits " + dl + " -> " + rp + " bytes (x" + dl / rp + ")");
-  return r.slice(0, rp);
-}
-function decodeRLE(rle, decodedlen) {
-  const r = new Uint8Array(rle.buffer);
-  const rI = new Int8Array(r.buffer);
-  let rp = 0;
-  const d = new Uint8Array(decodedlen);
-  let dp = 0;
-  while (rp < r.length) {
-    const hdr = rI[rp];
-    rp++;
-    if (hdr < 0) {
-      const v = rI[rp];
-      rp++;
-      for (let i = 0; i < 1 - hdr; i++) {
-        d[dp] = v;
-        dp++;
-      }
-    } else {
-      for (let i = 0; i < hdr + 1; i++) {
-        d[dp] = rI[rp];
-        rp++;
-        dp++;
-      }
-    }
-  }
-  return d;
-}
-function intensityRaw2Scaled(hdr, raw) {
-  if (hdr.scl_slope === 0) {
-    hdr.scl_slope = 1;
-  }
-  return raw * hdr.scl_slope + hdr.scl_inter;
 }
 
 // src/niivue/index.ts
@@ -34768,6 +35233,7 @@ var TEXTURE4_THUMBNAIL = 33988;
 var TEXTURE5_MATCAP = 33989;
 var TEXTURE6_GRADIENT = 33990;
 var TEXTURE7_DRAW = 33991;
+var TEXTURE8_PAQD = 33992;
 var TEXTURE8_GRADIENT_TEMP = 33992;
 var TEXTURE9_ORIENT = 33993;
 var TEXTURE10_BLEND = 33994;
@@ -34781,6 +35247,7 @@ var defaultSaveImageOptions = {
   isSaveDrawing: false,
   volumeByIndex: 0
 };
+var _eventsController;
 var Niivue = class {
   /**
    * @param options  - options object to set modifiable Niivue properties
@@ -34819,12 +35286,16 @@ var Niivue = class {
     __publicField(this, "renderGradientValues", false);
     __publicField(this, "drawTexture", null);
     // the GPU memory storage of the drawing
+    __publicField(this, "paqdTexture", null);
+    // the GPU memory storage of the probabilistic atlas
     __publicField(this, "drawUndoBitmaps", []);
     // array of drawBitmaps for undo
     __publicField(this, "drawLut", cmapper.makeDrawLut("$itksnap"));
     // the color lookup table for drawing
     __publicField(this, "drawOpacity", 0.8);
     // opacity of drawing (default)
+    __publicField(this, "drawRimOpacity", -1);
+    // opacity of pixels at edge of drawing (negative value to use drawOpacity)
     __publicField(this, "clickToSegmentIsGrowing", false);
     // flag to indicate if the clickToSegment flood fill growing is in progress with left mouse down + drag
     __publicField(this, "clickToSegmentGrowingBitmap", null);
@@ -34841,6 +35312,10 @@ var Niivue = class {
     // if true, fill overwrites existing drawing
     __publicField(this, "drawPenFillPts", []);
     // store mouse points for filled pen
+    __publicField(this, "drawShapeStartLocation", [NaN, NaN, NaN]);
+    // start location for rectangle/ellipse drawing
+    __publicField(this, "drawShapePreviewBitmap", null);
+    // preview bitmap for shape drawing
     __publicField(this, "overlayTexture", null);
     __publicField(this, "overlayTextureID", null);
     __publicField(this, "sliceMMShader");
@@ -34880,7 +35355,7 @@ var Niivue = class {
     __publicField(this, "orientShaderI", null);
     __publicField(this, "orientShaderF", null);
     __publicField(this, "orientShaderRGBU", null);
-    __publicField(this, "orientShaderSPARQ", null);
+    __publicField(this, "orientShaderPAQD", null);
     __publicField(this, "surfaceShader", null);
     __publicField(this, "blurShader", null);
     __publicField(this, "sobelBlurShader", null);
@@ -34951,9 +35426,12 @@ var Niivue = class {
       multiTouchGesture: false,
       windowX: 0,
       windowY: 0,
+      activeDragMode: null,
+      activeDragButton: null,
       angleFirstLine: [0, 0, 0, 0],
       angleState: "none"
     });
+    __privateAdd(this, _eventsController, null);
     __publicField(this, "back", null);
     // base layer; defines image space to work in. Defined as this.volumes[0] in Niivue.loadVolumes
     __publicField(this, "overlays", []);
@@ -35353,21 +35831,9 @@ var Niivue = class {
       this.canvasObserver.disconnect();
       this.canvasObserver = null;
     }
-    if (this.canvas && this.opts.interactive) {
-      this.canvas.removeEventListener("mousedown", this.mouseDownListener.bind(this));
-      this.canvas.removeEventListener("mouseup", this.mouseUpListener.bind(this));
-      this.canvas.removeEventListener("mousemove", this.mouseMoveListener.bind(this));
-      this.canvas.removeEventListener("touchstart", this.touchStartListener.bind(this));
-      this.canvas.removeEventListener("touchend", this.touchEndListener.bind(this));
-      this.canvas.removeEventListener("touchmove", this.touchMoveListener.bind(this));
-      this.canvas.removeEventListener("wheel", this.wheelListener.bind(this));
-      this.canvas.removeEventListener("contextmenu", this.mouseContextMenuListener.bind(this));
-      this.canvas.removeEventListener("dblclick", this.resetBriCon.bind(this));
-      this.canvas.removeEventListener("dragenter", this.dragEnterListener.bind(this));
-      this.canvas.removeEventListener("dragover", this.dragOverListener.bind(this));
-      this.canvas.removeEventListener("drop", this.dropListener.bind(this));
-      this.canvas.removeEventListener("keyup", this.keyUpListener.bind(this));
-      this.canvas.removeEventListener("keydown", this.keyDownListener.bind(this));
+    if (__privateGet(this, _eventsController)) {
+      __privateGet(this, _eventsController).abort();
+      __privateSet(this, _eventsController, null);
     }
     this.document.removeOptsChangeCallback();
   }
@@ -35655,7 +36121,9 @@ var Niivue = class {
       if (this.syncOpts["3d"]) {
         this.doSync3d(this.otherNV[i]);
       }
-      this.otherNV[i].drawScene();
+      if (this.otherNV[i].canvas !== this.canvas) {
+        this.otherNV[i].drawScene();
+      }
       this.otherNV[i].createOnLocationChange();
     }
   }
@@ -35773,17 +36241,25 @@ var Niivue = class {
    * @internal
    */
   mouseDownListener(e) {
+    this.uiData.mousedown = true;
+    if (!this.eventInBounds(e)) {
+      this.opts.showBoundsBorder = false;
+      this.drawScene();
+      return;
+    } else if (this.opts.bounds) {
+      this.opts.showBoundsBorder = true;
+    }
     e.preventDefault();
     this.drawPenLocation = [NaN, NaN, NaN];
     this.drawPenAxCorSag = -1;
-    this.uiData.mousedown = true;
+    this.drawShapeStartLocation = [NaN, NaN, NaN];
+    const pos = this.getNoPaddingNoBorderCanvasRelativeMousePosition(e, this.gl.canvas);
     if (!(this.opts.dragMode === 7 /* angle */ && this.uiData.angleState === "drawing_second_line")) {
-      this.setDragStart(0, 0);
-      this.setDragEnd(0, 0);
+      this.setDragStart(pos.x, pos.y);
+      this.setDragEnd(pos.x, pos.y);
     }
     log.debug("mouse down");
     log.debug(e);
-    const pos = this.getNoPaddingNoBorderCanvasRelativeMousePosition(e, this.gl.canvas);
     if (!pos) {
       return;
     }
@@ -35803,7 +36279,6 @@ var Niivue = class {
             const [x2, y2, z] = label.points;
             this.scene.crosshairPos = this.mm2frac([x2, y2, z]);
             this.updateGLVolume();
-            this.drawScene();
           }
           continue;
         }
@@ -35811,7 +36286,6 @@ var Niivue = class {
           if (node.label === label) {
             this.scene.crosshairPos = this.mm2frac([node.x, node.y, node.z]);
             this.updateGLVolume();
-            this.drawScene();
           }
         }
       }
@@ -35819,77 +36293,178 @@ var Niivue = class {
     this.uiData.clickedTile = this.tileIndex(x, y);
     if (e.button === LEFT_MOUSE_BUTTON && e.shiftKey) {
       this.uiData.mouseButtonCenterDown = true;
-      this.mouseCenterButtonHandler(e);
+      this.setActiveDragMode(LEFT_MOUSE_BUTTON, true, e.ctrlKey);
+      this.handleMouseAction(this.uiData.activeDragMode, e, pos);
     } else if (e.button === LEFT_MOUSE_BUTTON) {
       this.uiData.mouseButtonLeftDown = true;
-      this.mouseLeftButtonHandler(e);
+      this.setActiveDragMode(LEFT_MOUSE_BUTTON, false, e.ctrlKey);
+      this.handleMouseAction(this.uiData.activeDragMode, e, pos);
     } else if (e.button === RIGHT_MOUSE_BUTTON) {
       this.uiData.mouseButtonRightDown = true;
-      this.mouseRightButtonHandler(e);
+      this.setActiveDragMode(RIGHT_MOUSE_BUTTON, e.shiftKey, e.ctrlKey);
+      this.handleMouseAction(this.uiData.activeDragMode, e, pos);
     } else if (e.button === CENTER_MOUSE_BUTTON) {
       this.uiData.mouseButtonCenterDown = true;
-      this.mouseCenterButtonHandler(e);
+      this.setActiveDragMode(CENTER_MOUSE_BUTTON, e.shiftKey, e.ctrlKey);
+      this.handleMouseAction(this.uiData.activeDragMode, e, pos);
     }
+    this.drawScene();
   }
   /**
-   * Handles left mouse button actions for crosshair or windowing mode.
+   * Gets the appropriate drag mode for a mouse button based on configuration.
    * @internal
    */
-  mouseLeftButtonHandler(e) {
-    if (e.ctrlKey || this.opts.dragModePrimary === 0 /* crosshair */) {
-      const pos = this.getNoPaddingNoBorderCanvasRelativeMousePosition(e, this.gl.canvas);
+  getMouseButtonDragMode(button, shiftKey, ctrlKey) {
+    const mouseConfig = this.opts.mouseEventConfig;
+    if (button === LEFT_MOUSE_BUTTON) {
+      if (mouseConfig?.leftButton) {
+        if (shiftKey && mouseConfig.leftButton.withShift !== void 0) {
+          return mouseConfig.leftButton.withShift;
+        }
+        if (ctrlKey && mouseConfig.leftButton.withCtrl !== void 0) {
+          return mouseConfig.leftButton.withCtrl;
+        }
+        return mouseConfig.leftButton.primary;
+      }
+      return ctrlKey ? 8 /* crosshair */ : this.opts.dragModePrimary;
+    } else if (button === RIGHT_MOUSE_BUTTON) {
+      if (mouseConfig?.rightButton !== void 0) {
+        return mouseConfig.rightButton;
+      }
+      return this.opts.dragMode;
+    } else if (button === CENTER_MOUSE_BUTTON) {
+      if (mouseConfig?.centerButton !== void 0) {
+        return mouseConfig.centerButton;
+      }
+      return this.opts.dragMode;
+    }
+    return this.opts.dragMode;
+  }
+  /**
+   * Gets the appropriate drag mode for touch events based on configuration.
+   * @internal
+   */
+  getTouchDragMode(isDoubleTouch) {
+    const touchConfig = this.opts.touchEventConfig;
+    if (isDoubleTouch) {
+      return touchConfig?.doubleTouch ?? this.opts.dragMode;
+    }
+    return touchConfig?.singleTouch ?? this.opts.dragModePrimary;
+  }
+  /**
+   * Sets the active drag mode for the current interaction.
+   * @internal
+   */
+  setActiveDragMode(button, shiftKey, ctrlKey) {
+    this.uiData.activeDragMode = this.getMouseButtonDragMode(button, shiftKey, ctrlKey);
+    this.uiData.activeDragButton = button;
+  }
+  /**
+   * Gets the currently active drag mode, or falls back to configured defaults.
+   * @internal
+   */
+  getCurrentDragMode() {
+    if (this.uiData.activeDragMode !== null) {
+      return this.uiData.activeDragMode;
+    }
+    return this.opts.dragMode;
+  }
+  /**
+   * Clears the active drag mode.
+   * @internal
+   */
+  clearActiveDragMode() {
+    this.uiData.activeDragMode = null;
+    this.uiData.activeDragButton = null;
+  }
+  /**
+   * Unified handler for mouse actions based on drag mode.
+   * @internal
+   */
+  handleMouseAction(dragMode, e, pos) {
+    if (dragMode === 8 /* crosshair */) {
       this.mouseDown(pos.x, pos.y);
       this.mouseClick(pos.x, pos.y);
-    } else if (this.opts.dragModePrimary === 1 /* windowing */) {
+    } else if (dragMode === 9 /* windowing */) {
       this.uiData.windowX = e.x;
       this.uiData.windowY = e.y;
-    }
-  }
-  /**
-   * Handles center mouse button drag to initiate 2D panning or clip plane adjustment.
-   * @internal
-   */
-  mouseCenterButtonHandler(e) {
-    const pos = this.getNoPaddingNoBorderCanvasRelativeMousePosition(e, this.gl.canvas);
-    this.mousePos = [pos.x * this.uiData.dpr, pos.y * this.uiData.dpr];
-    if (this.opts.dragMode === 0 /* none */) {
-      return;
-    }
-    this.setDragStart(pos.x, pos.y);
-    if (!this.uiData.isDragging) {
-      this.uiData.pan2DxyzmmAtMouseDown = vec4_exports.clone(this.scene.pan2Dxyzmm);
-    }
-    this.uiData.isDragging = true;
-    this.uiData.dragClipPlaneStartDepthAziElev = this.scene.clipPlaneDepthAziElev;
-  }
-  /**
-   * Handles right mouse button drag to enable 2D panning or clip plane control.
-   * @internal
-   */
-  mouseRightButtonHandler(e) {
-    const pos = this.getNoPaddingNoBorderCanvasRelativeMousePosition(e, this.gl.canvas);
-    this.mousePos = [pos.x * this.uiData.dpr, pos.y * this.uiData.dpr];
-    if (this.opts.dragMode === 0 /* none */) {
-      return;
-    }
-    if (this.opts.dragMode === 7 /* angle */) {
-      if (this.uiData.angleState === "none") {
-        this.uiData.angleState = "drawing_first_line";
-      } else if (this.uiData.angleState === "drawing_second_line") {
-        this.uiData.angleState = "complete";
-        this.drawScene();
+    } else {
+      this.mousePos = [pos.x * this.uiData.dpr, pos.y * this.uiData.dpr];
+      if (dragMode === 0 /* none */) {
         return;
-      } else if (this.uiData.angleState === "complete") {
-        this.resetAngleMeasurement();
-        this.uiData.angleState = "drawing_first_line";
       }
+      if (dragMode === 7 /* angle */) {
+        if (this.uiData.angleState === "none") {
+          this.uiData.angleState = "drawing_first_line";
+        } else if (this.uiData.angleState === "drawing_second_line") {
+          const finalClickPos = [pos.x * this.uiData.dpr, pos.y * this.uiData.dpr];
+          const tileIdx = this.tileIndex(finalClickPos[0], finalClickPos[1]);
+          let sliceInfo = { sliceIndex: -1, sliceType: 0 /* AXIAL */, slicePosition: 0 };
+          if (tileIdx >= 0 && tileIdx < this.screenSlices.length) {
+            const sliceType = this.screenSlices[tileIdx].axCorSag;
+            let slicePosition = 0;
+            if (sliceType === 0 /* AXIAL */) {
+              slicePosition = this.scene.crosshairPos[2];
+            } else if (sliceType === 1 /* CORONAL */) {
+              slicePosition = this.scene.crosshairPos[1];
+            } else if (sliceType === 2 /* SAGITTAL */) {
+              slicePosition = this.scene.crosshairPos[0];
+            }
+            sliceInfo = {
+              sliceIndex: tileIdx,
+              sliceType,
+              slicePosition
+            };
+          }
+          const secondLine = [
+            this.uiData.angleFirstLine[2],
+            // start from end of first line
+            this.uiData.angleFirstLine[3],
+            finalClickPos[0],
+            // to final click position
+            finalClickPos[1]
+          ];
+          const firstLineStartFrac = this.canvasPos2frac([this.uiData.angleFirstLine[0], this.uiData.angleFirstLine[1]]);
+          const firstLineEndFrac = this.canvasPos2frac([this.uiData.angleFirstLine[2], this.uiData.angleFirstLine[3]]);
+          const secondLineStartFrac = this.canvasPos2frac([secondLine[0], secondLine[1]]);
+          const secondLineEndFrac = this.canvasPos2frac([secondLine[2], secondLine[3]]);
+          if (firstLineStartFrac[0] >= 0 && firstLineEndFrac[0] >= 0 && secondLineStartFrac[0] >= 0 && secondLineEndFrac[0] >= 0) {
+            const firstLineStartMM = this.frac2mm(firstLineStartFrac);
+            const firstLineEndMM = this.frac2mm(firstLineEndFrac);
+            const secondLineStartMM = this.frac2mm(secondLineStartFrac);
+            const secondLineEndMM = this.frac2mm(secondLineEndFrac);
+            const angleToSave = {
+              firstLineMM: {
+                start: vec3_exports.fromValues(firstLineStartMM[0], firstLineStartMM[1], firstLineStartMM[2]),
+                end: vec3_exports.fromValues(firstLineEndMM[0], firstLineEndMM[1], firstLineEndMM[2])
+              },
+              secondLineMM: {
+                start: vec3_exports.fromValues(secondLineStartMM[0], secondLineStartMM[1], secondLineStartMM[2]),
+                end: vec3_exports.fromValues(secondLineEndMM[0], secondLineEndMM[1], secondLineEndMM[2])
+              },
+              sliceIndex: sliceInfo.sliceIndex,
+              sliceType: sliceInfo.sliceType,
+              slicePosition: sliceInfo.slicePosition,
+              angle: this.calculateAngleBetweenLines(this.uiData.angleFirstLine, secondLine)
+            };
+            this.document.completedAngles.push(angleToSave);
+          }
+          this.resetAngleMeasurement();
+          this.uiData.angleState = "complete";
+          this.drawScene();
+          return;
+        } else if (this.uiData.angleState === "complete") {
+          this.resetAngleMeasurement();
+          this.uiData.angleState = "drawing_first_line";
+        }
+      }
+      this.setDragStart(pos.x, pos.y);
+      if (!this.uiData.isDragging) {
+        this.uiData.pan2DxyzmmAtMouseDown = vec4_exports.clone(this.scene.pan2Dxyzmm);
+      }
+      this.uiData.isDragging = true;
+      this.uiData.dragClipPlaneStartDepthAziElev = this.scene.clipPlaneDepthAziElev;
     }
-    this.setDragStart(pos.x, pos.y);
-    if (!this.uiData.isDragging) {
-      this.uiData.pan2DxyzmmAtMouseDown = vec4_exports.clone(this.scene.pan2Dxyzmm);
-    }
-    this.uiData.isDragging = true;
-    this.uiData.dragClipPlaneStartDepthAziElev = this.scene.clipPlaneDepthAziElev;
   }
   /**
    * calculate the the min and max voxel indices from an array of two values (used in selecting intensities with the selection box)
@@ -36007,6 +36582,7 @@ var Niivue = class {
    * @internal
    */
   mouseUpListener() {
+    this.uiData.mousedown = false;
     function isFunction(test) {
       return Object.prototype.toString.call(test).indexOf("Function") > -1;
     }
@@ -36018,22 +36594,37 @@ var Niivue = class {
       fracPos: this.canvasPos2frac(this.mousePos)
       // xyzMM: this.frac2mm(fracPos),
     };
-    this.uiData.mousedown = false;
     this.uiData.mouseButtonRightDown = false;
     const wasCenterDown = this.uiData.mouseButtonCenterDown;
     this.uiData.mouseButtonCenterDown = false;
     this.uiData.mouseButtonLeftDown = false;
+    const currentDragMode = this.getCurrentDragMode();
     if (this.drawPenFillPts.length > 0) {
       this.drawPenFilled();
+    } else if (this.opts.drawingEnabled && !isNaN(this.drawPenLocation[0])) {
+      this.drawAddUndoBitmap();
+    } else if (this.opts.drawingEnabled && !isNaN(this.drawShapeStartLocation[0]) && (this.opts.penType === 1 /* RECTANGLE */ || this.opts.penType === 2 /* ELLIPSE */)) {
+      if (this.opts.penValue === 0) {
+        this.drawAddUndoBitmap();
+      } else {
+        this.drawAddUndoBitmap(this.drawFillOverwrites);
+      }
+      this.drawShapePreviewBitmap = null;
     }
     this.drawPenLocation = [NaN, NaN, NaN];
     this.drawPenAxCorSag = -1;
+    this.drawShapeStartLocation = [NaN, NaN, NaN];
+    if (this.drawShapePreviewBitmap) {
+      this.drawBitmap = this.drawShapePreviewBitmap;
+      this.drawShapePreviewBitmap = null;
+      this.refreshDrawing(true, false);
+    }
     if (isFunction(this.onMouseUp)) {
       this.onMouseUp(uiData);
     }
     if (this.uiData.isDragging) {
       this.uiData.isDragging = false;
-      if (this.opts.dragMode === 7 /* angle */) {
+      if (currentDragMode === 7 /* angle */) {
         if (this.uiData.angleState === "drawing_first_line") {
           this.uiData.angleFirstLine = [
             this.uiData.dragStart[0],
@@ -36045,33 +36636,61 @@ var Niivue = class {
           this.uiData.isDragging = true;
           this.drawScene();
           return;
-        } else if (this.uiData.angleState === "drawing_second_line") {
+        }
+        if (this.uiData.angleState === "drawing_second_line") {
           this.uiData.angleState = "complete";
+          this.clearActiveDragMode();
           this.drawScene();
           return;
         }
       }
-      if (this.opts.dragMode === 5 /* callbackOnly */) {
+      if (currentDragMode === 5 /* callbackOnly */) {
         this.drawScene();
       }
       const fracStart = this.canvasPos2frac([this.uiData.dragStart[0], this.uiData.dragStart[1]]);
       const fracEnd = this.canvasPos2frac([this.uiData.dragEnd[0], this.uiData.dragEnd[1]]);
       this.generateMouseUpCallback(fracStart, fracEnd);
-      if (this.opts.dragMode === 6 /* roiSelection */) {
+      if (currentDragMode === 6 /* roiSelection */) {
+        this.clearActiveDragMode();
         return;
       }
-      if (this.opts.dragMode !== 1 /* contrast */) {
+      if (currentDragMode === 1 /* contrast */) {
+        if (wasCenterDown) {
+          this.clearActiveDragMode();
+          return;
+        }
+        if (this.uiData.dragStart[0] === this.uiData.dragEnd[0] && this.uiData.dragStart[1] === this.uiData.dragEnd[1]) {
+          this.clearActiveDragMode();
+          return;
+        }
+        this.calculateNewRange({ volIdx: 0 });
+        this.refreshLayers(this.volumes[0], 0);
+      }
+      if (currentDragMode === 2 /* measurement */) {
+        const sliceInfo = this.getCurrentSliceInfo();
+        const startFrac = this.canvasPos2frac([this.uiData.dragStart[0], this.uiData.dragStart[1]]);
+        const endFrac = this.canvasPos2frac([this.uiData.dragEnd[0], this.uiData.dragEnd[1]]);
+        if (startFrac[0] >= 0 && endFrac[0] >= 0) {
+          const startMM = this.frac2mm(startFrac);
+          const endMM = this.frac2mm(endFrac);
+          this.document.completedMeasurements.push({
+            startMM: vec3_exports.fromValues(startMM[0], startMM[1], startMM[2]),
+            endMM: vec3_exports.fromValues(endMM[0], endMM[1], endMM[2]),
+            sliceIndex: sliceInfo.sliceIndex,
+            sliceType: sliceInfo.sliceType,
+            slicePosition: sliceInfo.slicePosition,
+            distance: vec3_exports.distance(
+              vec3_exports.fromValues(startMM[0], startMM[1], startMM[2]),
+              vec3_exports.fromValues(endMM[0], endMM[1], endMM[2])
+            )
+          });
+        }
+        this.clearActiveDragMode();
+        this.drawScene();
         return;
       }
-      if (wasCenterDown) {
-        return;
-      }
-      if (this.uiData.dragStart[0] === this.uiData.dragEnd[0] && this.uiData.dragStart[1] === this.uiData.dragEnd[1]) {
-        return;
-      }
-      this.calculateNewRange({ volIdx: 0 });
-      this.refreshLayers(this.volumes[0], 0);
     }
+    this.clearActiveDragMode();
     this.drawScene();
   }
   /**
@@ -36136,7 +36755,7 @@ var Niivue = class {
     }
     if (this.uiData.isDragging) {
       this.uiData.isDragging = false;
-      if (this.opts.dragMode === 1 /* contrast */) {
+      if (this.getCurrentDragMode() === 1 /* contrast */) {
         this.calculateNewRange();
         this.refreshLayers(this.volumes[0], 0);
       }
@@ -36205,7 +36824,16 @@ var Niivue = class {
       this.drawPenAxCorSag = -1;
       this.drawPenFillPts = [];
     }
-    if (this.uiData.isDragging) {
+    if (this.opts.drawingEnabled && !isNaN(this.drawShapeStartLocation[0])) {
+      log.debug("Mouse left canvas during shape drawing, resetting shape state.");
+      this.drawShapeStartLocation = [NaN, NaN, NaN];
+      if (this.drawShapePreviewBitmap) {
+        this.drawBitmap = this.drawShapePreviewBitmap;
+        this.drawShapePreviewBitmap = null;
+        this.refreshDrawing(true, false);
+      }
+    }
+    if (this.uiData.isDragging || this.uiData.mousedown) {
       log.debug("Mouse left canvas during drag, resetting drag state.");
       this.uiData.isDragging = false;
       this.uiData.mouseButtonLeftDown = false;
@@ -36214,6 +36842,7 @@ var Niivue = class {
       this.uiData.mousedown = false;
       this.drawScene();
     }
+    this.mousePos = [-1, -1];
   }
   /**
    * Handles mouse move events for dragging, crosshair movement, windowing, and click-to-segment preview.
@@ -36221,46 +36850,57 @@ var Niivue = class {
    */
   mouseMoveListener(e) {
     if (this.uiData.mousedown) {
-      const pos = this.getNoPaddingNoBorderCanvasRelativeMousePosition(e, this.gl.canvas);
-      if (!pos) {
-        return;
-      }
+      this.drawScene();
+    }
+    const pos = this.getNoPaddingNoBorderCanvasRelativeMousePosition(e, this.gl.canvas);
+    if (!pos) {
+      return;
+    }
+    if (!this.eventInBounds(e)) {
+      this.updateMousePos(pos.x, pos.y);
+      return;
+    }
+    if (this.uiData.mousedown) {
       const x = pos.x * this.uiData.dpr;
       const y = pos.y * this.uiData.dpr;
       const tile = this.tileIndex(x, y);
       if (tile !== this.uiData.clickedTile) {
         return;
       }
-      if (this.uiData.mouseButtonLeftDown) {
-        const isCrosshairMode = this.opts.dragModePrimary === 0 /* crosshair */;
-        const isWindowingMode = this.opts.dragModePrimary === 1 /* windowing */;
-        const ctrlKey = e.ctrlKey;
-        if (ctrlKey || isCrosshairMode) {
-          this.mouseMove(pos.x, pos.y);
-          this.mouseClick(pos.x, pos.y);
-        } else if (isWindowingMode) {
-          this.windowingHandler(e.x, e.y);
-        }
-      } else if (this.uiData.mouseButtonRightDown || this.uiData.mouseButtonCenterDown) {
-        this.setDragEnd(pos.x, pos.y);
+      const activeDragMode = this.getCurrentDragMode();
+      if (activeDragMode === 8 /* crosshair */) {
+        this.mouseMove(pos.x, pos.y);
+        this.mouseClick(pos.x, pos.y);
+        this.drawScene();
+        this.uiData.prevX = this.uiData.currX;
+        this.uiData.prevY = this.uiData.currY;
+        return;
       }
-      this.drawScene();
-      this.uiData.prevX = this.uiData.currX;
-      this.uiData.prevY = this.uiData.currY;
-    } else if (this.opts.dragMode === 7 /* angle */ && this.uiData.angleState === "drawing_second_line") {
-      const pos = this.getNoPaddingNoBorderCanvasRelativeMousePosition(e, this.gl.canvas);
-      if (!pos) {
+      if (activeDragMode === 9 /* windowing */) {
+        this.windowingHandler(pos.x, pos.y);
+        this.drawScene();
+        this.uiData.prevX = this.uiData.currX;
+        this.uiData.prevY = this.uiData.currY;
         return;
       }
       this.setDragEnd(pos.x, pos.y);
       this.drawScene();
-    } else if (!this.uiData.mousedown && this.opts.clickToSegment) {
-      const pos = this.getNoPaddingNoBorderCanvasRelativeMousePosition(e, this.gl.canvas);
-      if (!pos) {
+      this.uiData.prevX = this.uiData.currX;
+      this.uiData.prevY = this.uiData.currY;
+    } else if (this.getCurrentDragMode() === 7 /* angle */ && this.uiData.angleState === "drawing_second_line") {
+      const pos2 = this.getNoPaddingNoBorderCanvasRelativeMousePosition(e, this.gl.canvas);
+      if (!pos2) {
         return;
       }
-      const x = pos.x * this.uiData.dpr;
-      const y = pos.y * this.uiData.dpr;
+      this.setDragEnd(pos2.x, pos2.y);
+      this.drawScene();
+    } else if (!this.uiData.mousedown && this.opts.clickToSegment) {
+      const pos2 = this.getNoPaddingNoBorderCanvasRelativeMousePosition(e, this.gl.canvas);
+      if (!pos2) {
+        return;
+      }
+      const x = pos2.x * this.uiData.dpr;
+      const y = pos2.y * this.uiData.dpr;
       this.mousePos = [x, y];
       const tileIdx = this.tileIndex(x, y);
       if (tileIdx >= 0 && this.opts.drawingEnabled) {
@@ -36285,6 +36925,10 @@ var Niivue = class {
    */
   resetBriCon(msg = null) {
     if (this.uiData.isDragging) {
+      return;
+    }
+    if (!this.eventInBounds(msg)) {
+      this.opts.showBoundsBorder = false;
       return;
     }
     let isRender = false;
@@ -36313,7 +36957,7 @@ var Niivue = class {
       this.drawScene();
       return;
     }
-    if (this.opts.dragMode === 4 /* slicer3D */) {
+    if (this.getCurrentDragMode() === 4 /* slicer3D */) {
       return;
     }
     if (this.volumes.length < 1) {
@@ -36367,12 +37011,11 @@ var Niivue = class {
         this.drawScene();
         return;
       }
-      const isCrosshairMode = this.opts.dragModePrimary === 0 /* crosshair */;
-      const isWindowingMode = this.opts.dragModePrimary === 1 /* windowing */;
-      if (isCrosshairMode) {
+      const dragMode = this.getTouchDragMode(false);
+      if (dragMode === 8 /* crosshair */) {
         this.mouseClick(e.touches[0].clientX - rect.left, e.touches[0].clientY - rect.top);
         this.mouseMove(e.touches[0].clientX - rect.left, e.touches[0].clientY - rect.top);
-      } else if (isWindowingMode) {
+      } else if (dragMode === 9 /* windowing */) {
         this.windowingHandler(e.touches[0].pageX, e.touches[0].pageY);
         this.drawScene();
       }
@@ -36402,6 +37045,11 @@ var Niivue = class {
    * @internal
    */
   keyUpListener(e) {
+    if (!this.cursorInBounds()) {
+      this.opts.showBoundsBorder = false;
+      this.drawScene();
+      return;
+    }
     if (e.code === this.opts.clipPlaneHotKey) {
       const now = (/* @__PURE__ */ new Date()).getTime();
       const elapsed = now - this.lastCalled;
@@ -36441,12 +37089,18 @@ var Niivue = class {
         this.lastCalled = now;
       }
     }
+    this.drawScene();
   }
   /**
    * Handles key down events for navigation, rendering controls, slice movement, and mode switching.
    * @internal
    */
   keyDownListener(e) {
+    if (!this.cursorInBounds()) {
+      this.opts.showBoundsBorder = false;
+      this.drawScene();
+      return;
+    }
     if (e.code === "KeyH" && this.opts.sliceType === 4 /* RENDER */) {
       this.setRenderAzimuthElevation(this.scene.renderAzimuth - 1, this.scene.renderElevation);
     } else if (e.code === "KeyL" && this.opts.sliceType === 4 /* RENDER */) {
@@ -36480,6 +37134,7 @@ var Niivue = class {
     } else if (e.code === "Slash" && e.shiftKey) {
       alert(`NIIVUE VERSION: ${version}`);
     }
+    this.drawScene();
   }
   /**
    * Handles scroll wheel events for slice scrolling, ROI box resizing, zooming, or segmentation thresholding.
@@ -36492,12 +37147,19 @@ var Niivue = class {
     if (this.opts.sliceMosaicString.length > 0) {
       return;
     }
+    if (!this.eventInBounds(e)) {
+      this.opts.showBoundsBorder = false;
+      this.drawScene();
+      return;
+    } else if (this.opts.bounds) {
+      this.opts.showBoundsBorder = true;
+    }
     e.preventDefault();
     e.stopPropagation();
     const dragStartSum = this.uiData.dragStart.reduce((a, b) => a + b, 0);
     const dragEndSum = this.uiData.dragEnd.reduce((a, b) => a + b, 0);
     const validDrag = dragStartSum > 0 && dragEndSum > 0;
-    if (this.opts.dragMode === 6 /* roiSelection */ && validDrag) {
+    if (this.getCurrentDragMode() === 6 /* roiSelection */ && validDrag) {
       const delta = e.deltaY > 0 ? 1 : -1;
       if (this.uiData.dragStart[0] < this.uiData.dragEnd[0]) {
         this.uiData.dragStart[0] -= delta;
@@ -36552,7 +37214,7 @@ var Niivue = class {
     const rect = this.canvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    if (this.opts.dragMode === 3 /* pan */ && this.inRenderTile(this.uiData.dpr * x, this.uiData.dpr * y) === -1) {
+    if (this.getCurrentDragMode() === 3 /* pan */ && this.inRenderTile(this.uiData.dpr * x, this.uiData.dpr * y) === -1) {
       const zoomDirection = scrollAmount < 0 ? 1 : -1;
       let zoom = this.scene.pan2Dxyzmm[3] * (1 + 10 * (0.01 * zoomDirection));
       zoom = Math.round(zoom * 10) / 10;
@@ -36581,28 +37243,30 @@ var Niivue = class {
     if (!this.canvas) {
       throw new Error("canvas undefined");
     }
-    this.canvas.addEventListener("mousedown", this.mouseDownListener.bind(this));
-    this.canvas.addEventListener("mouseup", this.mouseUpListener.bind(this));
-    this.canvas.addEventListener("mousemove", this.mouseMoveListener.bind(this));
-    this.canvas.addEventListener("mouseleave", this.mouseLeaveListener.bind(this));
-    this.canvas.addEventListener("touchstart", this.touchStartListener.bind(this));
-    this.canvas.addEventListener("touchend", this.touchEndListener.bind(this));
-    this.canvas.addEventListener("touchmove", this.touchMoveListener.bind(this));
-    this.canvas.addEventListener("wheel", this.wheelListener.bind(this));
-    this.canvas.addEventListener("contextmenu", this.mouseContextMenuListener.bind(this));
-    this.canvas.addEventListener("dblclick", this.resetBriCon.bind(this));
-    this.canvas.addEventListener("dragenter", this.dragEnterListener.bind(this), false);
-    this.canvas.addEventListener("dragover", this.dragOverListener.bind(this), false);
+    __privateSet(this, _eventsController, new AbortController());
+    const { signal } = __privateGet(this, _eventsController);
+    this.canvas.addEventListener("mousedown", this.mouseDownListener.bind(this), { signal });
+    this.canvas.addEventListener("mouseup", this.mouseUpListener.bind(this), { signal });
+    this.canvas.addEventListener("mousemove", this.mouseMoveListener.bind(this), { signal });
+    this.canvas.addEventListener("mouseleave", this.mouseLeaveListener.bind(this), { signal });
+    this.canvas.addEventListener("touchstart", this.touchStartListener.bind(this), { signal });
+    this.canvas.addEventListener("touchend", this.touchEndListener.bind(this), { signal });
+    this.canvas.addEventListener("touchmove", this.touchMoveListener.bind(this), { signal });
+    this.canvas.addEventListener("wheel", this.wheelListener.bind(this), { signal });
+    this.canvas.addEventListener("contextmenu", this.mouseContextMenuListener.bind(this), { signal });
+    this.canvas.addEventListener("dblclick", this.resetBriCon.bind(this), { signal });
+    this.canvas.addEventListener("dragenter", this.dragEnterListener.bind(this), { signal });
+    this.canvas.addEventListener("dragover", this.dragOverListener.bind(this), { signal });
     this.canvas.addEventListener(
       "drop",
       (event) => {
         this.dropListener(event).catch(console.error);
       },
-      false
+      { signal }
     );
     this.canvas.setAttribute("tabindex", "0");
-    this.canvas.addEventListener("keyup", this.keyUpListener.bind(this), false);
-    this.canvas.addEventListener("keydown", this.keyDownListener.bind(this), false);
+    this.canvas.addEventListener("keyup", this.keyUpListener.bind(this), { signal });
+    this.canvas.addEventListener("keydown", this.keyDownListener.bind(this), { signal });
   }
   /**
    * Prevents default behavior when a dragged item enters the canvas.
@@ -36783,7 +37447,6 @@ var Niivue = class {
       };
       for (let i = 0; i < fileSystemEntries.length; i++) {
         allFileObects.push(await getFile(fileSystemEntries[i]));
-        console.log(allFileObects);
       }
       return allFileObects;
     };
@@ -36793,8 +37456,7 @@ var Niivue = class {
           allEntiresInDir = allEntiresInDir.concat(entries);
           readEntries();
         } else {
-          getFileObjects(allEntiresInDir).then(async (allFileObjects) => {
-            console.log(allFileObjects);
+          getFileObjects(allEntiresInDir).then(async () => {
           }).catch((e) => {
             throw e;
           });
@@ -36919,6 +37581,12 @@ var Niivue = class {
    * @internal
    */
   async dropListener(e) {
+    if (!this.eventInBounds(e)) {
+      this.opts.showBoundsBorder = false;
+      return;
+    } else if (this.opts.bounds) {
+      this.opts.showBoundsBorder = true;
+    }
     e.stopPropagation();
     e.preventDefault();
     if (!this.opts.dragAndDropEnabled) {
@@ -36959,6 +37627,7 @@ var Niivue = class {
           this.meshes = [];
         }
         this.closeDrawing();
+        this.closePAQD();
         for (const item of Array.from(items)) {
           const entry = item.webkitGetAsEntry();
           log.debug(entry);
@@ -37076,7 +37745,6 @@ var Niivue = class {
                 throw new Error("No loader for DICOM files");
               }
               loader(files2).then(async (fileArrayBuffers) => {
-                console.log(fileArrayBuffers);
                 const promises = fileArrayBuffers.map(
                   (loaderImage) => NVImage.loadFromUrl({
                     url: loaderImage.data,
@@ -37085,8 +37753,6 @@ var Niivue = class {
                   })
                 );
                 Promise.all(promises).then(async (loadedNvImages) => {
-                  console.log("from dicom loader");
-                  console.log(loadedNvImages);
                   await this.onDicomLoaderFinishedWithImages(loadedNvImages);
                 }).catch((e2) => {
                   throw e2;
@@ -37144,6 +37810,15 @@ var Niivue = class {
    */
   setIsOrientationTextVisible(isOrientationTextVisible) {
     this.opts.isOrientationTextVisible = isOrientationTextVisible;
+    this.drawScene();
+  }
+  /**
+   * Show or hide all four orientation labels (e.g., L/R, A/P, S/I) in 2D slice views
+   * @param showAllOrientationMarkers - whether all four orientation markers should be displayed
+   * @example niivue.setShowAllOrientationMarkers(true)
+   */
+  setShowAllOrientationMarkers(showAllOrientationMarkers) {
+    this.opts.showAllOrientationMarkers = showAllOrientationMarkers;
     this.drawScene();
   }
   /**
@@ -37388,10 +38063,20 @@ var Niivue = class {
    * Uses a circular buffer to limit undo memory usage.
    * @internal
    */
-  drawAddUndoBitmap() {
+  drawAddUndoBitmap(drawFillOverwrites = true) {
     if (!this.drawBitmap || this.drawBitmap.length < 1) {
       log.debug("drawAddUndoBitmap error: No drawing open");
       return;
+    }
+    if (!drawFillOverwrites && this.drawUndoBitmaps.length > 0) {
+      const len4 = this.drawBitmap.length;
+      const bmp = decodeRLE(this.drawUndoBitmaps[this.currentDrawUndoBitmap], len4);
+      for (let i = 0; i < len4; i++) {
+        if (bmp[i] > 0) {
+          this.drawBitmap[i] = bmp[i];
+        }
+      }
+      this.refreshDrawing(false);
     }
     this.currentDrawUndoBitmap++;
     if (this.currentDrawUndoBitmap >= this.opts.maxDrawUndoBitmaps) {
@@ -37418,22 +38103,13 @@ var Niivue = class {
    * @see {@link https://niivue.com/demos/features/draw.ui.html | live demo usage}
    */
   drawUndo() {
-    if (this.drawUndoBitmaps.length < 1) {
-      log.debug("undo bitmaps not loaded");
-      return;
-    }
-    this.currentDrawUndoBitmap--;
-    if (this.currentDrawUndoBitmap < 0) {
-      this.currentDrawUndoBitmap = this.drawUndoBitmaps.length - 1;
-    }
-    if (this.currentDrawUndoBitmap >= this.drawUndoBitmaps.length) {
-      this.currentDrawUndoBitmap = 0;
-    }
-    if (this.drawUndoBitmaps[this.currentDrawUndoBitmap].length < 2) {
-      log.debug("drawUndo is misbehaving");
-      return;
-    }
-    this.drawBitmap = decodeRLE(this.drawUndoBitmaps[this.currentDrawUndoBitmap], this.drawBitmap.length);
+    const { drawBitmap, currentDrawUndoBitmap } = drawUndo({
+      drawUndoBitmaps: this.drawUndoBitmaps,
+      currentDrawUndoBitmap: this.currentDrawUndoBitmap,
+      drawBitmap: this.drawBitmap
+    });
+    this.drawBitmap = drawBitmap;
+    this.currentDrawUndoBitmap = currentDrawUndoBitmap;
     this.refreshDrawing(true);
   }
   /**
@@ -38182,7 +38858,17 @@ var Niivue = class {
     this.mousePos = [x, y];
   }
   /**
-   * Updates mouse position and modifies 3D render view if the pointer is in the render tile.
+   * Updates mouse position
+   * @internal
+   */
+  updateMousePos(x, y) {
+    x *= this.uiData.dpr;
+    y *= this.uiData.dpr;
+    this.mousePos = [x, y];
+    return [x, y];
+  }
+  /**
+   *  and modifies 3D render view if the pointer is in the render tile.
    *
    * @internal
    */
@@ -38304,6 +38990,11 @@ var Niivue = class {
       this.drawPenLocation = [NaN, NaN, NaN];
       this.drawPenAxCorSag = -1;
       this.drawPenFillPts = [];
+      this.drawShapeStartLocation = [NaN, NaN, NaN];
+      if (this.drawShapePreviewBitmap) {
+        this.drawBitmap = this.drawShapePreviewBitmap;
+        this.drawShapePreviewBitmap = null;
+      }
     }
     this.drawScene();
   }
@@ -38339,6 +39030,27 @@ var Niivue = class {
    */
   setSelectionBoxColor(color) {
     this.opts.selectionBoxColor = color;
+  }
+  /**
+   * Update the drawing bounds for this Niivue instance.
+   *
+   * @param bounds - [x1, y1, x2, y2] in normalized (0–1) coordinates.
+   *
+   * Example:
+   *   nv.setBounds([0,0,0.5,0.5])   // top-left quarter
+   *   nv.setBounds([0.5,0.5,1,1])   // bottom-right quarter
+   */
+  setBounds(bounds) {
+    if (!Array.isArray(bounds) || bounds.length !== 4) {
+      throw new Error("setBounds: expected [x1,y1,x2,y2] array");
+    }
+    this.opts.bounds = [
+      [bounds[0], bounds[1]],
+      [bounds[2], bounds[3]]
+    ];
+    if (this.gl) {
+      this.drawScene();
+    }
   }
   /**
    * Handles mouse wheel or trackpad scroll to change slices, zoom, or frame depending on context.
@@ -38905,8 +39617,6 @@ var Niivue = class {
     }
     this.drawScene();
     this.volumes = [];
-    this.gl.clearColor(0, 0, 0, 1);
-    this.gl.clear(this.gl.COLOR_BUFFER_BIT);
     const promises = dicomList.map(async (dicom) => {
       let dicomData = null;
       if (dicom.isManifest) {
@@ -38923,7 +39633,6 @@ var Niivue = class {
       }
       const dicomLoader = this.getDicomLoader().loader;
       const convertedArrayBuffer = await dicomLoader(dicomData);
-      console.log(convertedArrayBuffer);
       const name = convertedArrayBuffer[0].name;
       const data = convertedArrayBuffer[0].data;
       const image = await NVImage.loadFromUrl({ url: data, name });
@@ -38953,8 +39662,7 @@ var Niivue = class {
       return this;
     }
     this.volumes = [];
-    this.gl.clearColor(0, 0, 0, 1);
-    this.gl.clear(this.gl.COLOR_BUFFER_BIT);
+    this.closePAQD();
     await this.addVolumesFromUrl(volumeList);
     return this;
   }
@@ -39043,8 +39751,6 @@ var Niivue = class {
     if (!this.initialized) {
     }
     this.meshes = [];
-    this.gl.clearColor(0, 0, 0, 1);
-    this.gl.clear(this.gl.COLOR_BUFFER_BIT);
     await this.addMeshesFromUrl(meshList);
     this.updateGLVolume();
     this.drawScene();
@@ -39138,8 +39844,6 @@ var Niivue = class {
   loadConnectome(json) {
     this.drawScene();
     this.meshes = [];
-    this.gl.clearColor(0, 0, 0, 1);
-    this.gl.clear(this.gl.COLOR_BUFFER_BIT);
     const mesh = this.loadConnectomeAsMesh(json);
     this.addMesh(mesh);
     this.drawScene();
@@ -39439,6 +40143,67 @@ var Niivue = class {
         p1 += 2 * dy;
         p2 += 2 * dx;
         this.drawPt(x1, y1, z1, penValue);
+      }
+    }
+  }
+  /**
+   * Draw a rectangle from point A to point B
+   * @internal
+   */
+  drawRectangleMask(ptA, ptB, penValue) {
+    if (!this.back?.dims) {
+      throw new Error("back.dims not set");
+    }
+    const dx = this.back.dims[1];
+    const dy = this.back.dims[2];
+    const dz = this.back.dims[3];
+    const x1 = Math.min(Math.max(Math.min(ptA[0], ptB[0]), 0), dx - 1);
+    const y1 = Math.min(Math.max(Math.min(ptA[1], ptB[1]), 0), dy - 1);
+    const z1 = Math.min(Math.max(Math.min(ptA[2], ptB[2]), 0), dz - 1);
+    const x2 = Math.min(Math.max(Math.max(ptA[0], ptB[0]), 0), dx - 1);
+    const y2 = Math.min(Math.max(Math.max(ptA[1], ptB[1]), 0), dy - 1);
+    const z2 = Math.min(Math.max(Math.max(ptA[2], ptB[2]), 0), dz - 1);
+    for (let z = z1; z <= z2; z++) {
+      for (let y = y1; y <= y2; y++) {
+        for (let x = x1; x <= x2; x++) {
+          this.drawPt(x, y, z, penValue);
+        }
+      }
+    }
+  }
+  /**
+   * Draw an ellipse from point A to point B (treating them as opposite corners of bounding box)
+   * @internal
+   */
+  drawEllipseMask(ptA, ptB, penValue) {
+    if (!this.back?.dims) {
+      throw new Error("back.dims not set");
+    }
+    const dx = this.back.dims[1];
+    const dy = this.back.dims[2];
+    const dz = this.back.dims[3];
+    const x1 = Math.min(Math.max(Math.min(ptA[0], ptB[0]), 0), dx - 1);
+    const y1 = Math.min(Math.max(Math.min(ptA[1], ptB[1]), 0), dy - 1);
+    const z1 = Math.min(Math.max(Math.min(ptA[2], ptB[2]), 0), dz - 1);
+    const x2 = Math.min(Math.max(Math.max(ptA[0], ptB[0]), 0), dx - 1);
+    const y2 = Math.min(Math.max(Math.max(ptA[1], ptB[1]), 0), dy - 1);
+    const z2 = Math.min(Math.max(Math.max(ptA[2], ptB[2]), 0), dz - 1);
+    const centerX = (x1 + x2) / 2;
+    const centerY = (y1 + y2) / 2;
+    const centerZ = (z1 + z2) / 2;
+    const radiusX = Math.abs(x2 - x1) / 2;
+    const radiusY = Math.abs(y2 - y1) / 2;
+    const radiusZ = Math.abs(z2 - z1) / 2;
+    for (let z = z1; z <= z2; z++) {
+      for (let y = y1; y <= y2; y++) {
+        for (let x = x1; x <= x2; x++) {
+          const distX = (x - centerX) / (radiusX + 0.5);
+          const distY = (y - centerY) / (radiusY + 0.5);
+          const distZ = (z - centerZ) / (radiusZ + 0.5);
+          if (distX * distX + distY * distY + distZ * distZ <= 1) {
+            this.drawPt(x, y, z, penValue);
+          }
+        }
       }
     }
   }
@@ -39842,6 +40607,59 @@ var Niivue = class {
     }
   }
   /**
+   * Fills exterior regions of a 2D bitmap, marking outside voxels with 2
+   * while leaving interior voxels at 0 and borders at 1. Operates within specified bounds.
+   * uses first-in, first out queue for storage
+   * @internal
+   */
+  floodFillSectionFIFO(img2D, dims2D, minPt, maxPt) {
+    const w = dims2D[0];
+    const [minX, minY] = minPt;
+    const [maxX, maxY] = maxPt;
+    const capacity = 4 * (maxX - minX + maxY - minY + 2);
+    const queue = new Int32Array(capacity * 2);
+    let head = 0;
+    let tail = 0;
+    function enqueue(x, y) {
+      if (x < minX || x > maxX || y < minY || y > maxY) {
+        return;
+      }
+      const idx = x + y * w;
+      if (img2D[idx] !== 0) {
+        return;
+      }
+      img2D[idx] = 2;
+      queue[tail] = x;
+      queue[tail + 1] = y;
+      tail = (tail + 2) % queue.length;
+    }
+    function dequeue() {
+      if (head === tail) {
+        return null;
+      }
+      const x = queue[head];
+      const y = queue[head + 1];
+      head = (head + 2) % queue.length;
+      return [x, y];
+    }
+    for (let x = minX; x <= maxX; x++) {
+      enqueue(x, minY);
+      enqueue(x, maxY);
+    }
+    for (let y = minY + 1; y <= maxY - 1; y++) {
+      enqueue(minX, y);
+      enqueue(maxX, y);
+    }
+    let pt;
+    while ((pt = dequeue()) !== null) {
+      const [x, y] = pt;
+      enqueue(x - 1, y);
+      enqueue(x + 1, y);
+      enqueue(x, y - 1);
+      enqueue(x, y + 1);
+    }
+  }
+  /**
    * Connects and fills the interior of drawn line segments in 2D slice space.
    * @internal
    */
@@ -39943,33 +40761,9 @@ var Niivue = class {
         img2D[pxl] = 2;
       }
     }
-    const seeds = [];
-    function setSeed(pt) {
-      if (pt[0] < minPt[0] || pt[1] < minPt[1] || pt[0] > maxPt[0] || pt[1] > maxPt[1]) {
-        return;
-      }
-      const pxl = pt[0] + pt[1] * dims2D[0];
-      if (img2D[pxl] !== 0) {
-        return;
-      }
-      seeds.push(pt);
-      img2D[pxl] = 2;
-    }
-    for (let x = minPt[0]; x <= maxPt[0]; x++) {
-      setSeed([x, minPt[1]]);
-      setSeed([x, maxPt[1]]);
-    }
-    for (let y = minPt[1] + 1; y <= maxPt[1] - 1; y++) {
-      setSeed([minPt[0], y]);
-      setSeed([maxPt[0], y]);
-    }
-    while (seeds.length > 0) {
-      const seed = seeds.shift();
-      setSeed([seed[0] - 1, seed[1]]);
-      setSeed([seed[0] + 1, seed[1]]);
-      setSeed([seed[0], seed[1] - 1]);
-      setSeed([seed[0], seed[1] + 1]);
-    }
+    const startTime = Date.now();
+    this.floodFillSectionFIFO(img2D, dims2D, minPt, maxPt);
+    log.debug(`FloodFill ${Date.now() - startTime}`);
     pen = this.opts.penValue;
     const slice2 = this.drawPenFillPts[0][3 - (h + v)];
     if (!this.drawBitmap) {
@@ -40021,7 +40815,7 @@ var Niivue = class {
    */
   closeDrawing() {
     this.drawClearAllUndoBitmaps();
-    this.rgbaTex(this.drawTexture, TEXTURE7_DRAW, [2, 2, 2, 2], true);
+    this.drawTexture = this.rgbaTex(this.drawTexture, TEXTURE7_DRAW, [2, 2, 2, 2], true);
     this.drawBitmap = null;
     this.clickToSegmentGrowingBitmap = null;
     this.drawScene();
@@ -40115,6 +40909,17 @@ var Niivue = class {
     if (isForceRedraw) {
       this.drawScene();
     }
+  }
+  /**
+   * close probabilistic atlas texture
+   * @example niivue.closePAQD();
+   * @internal
+   */
+  closePAQD() {
+    if (!this._gl || !this.paqdTexture) {
+      return;
+    }
+    this.paqdTexture = this.rgbaTex(this.paqdTexture, TEXTURE8_PAQD, [2, 2, 2, 2], true);
   }
   /**
    * Creates a 2D 1-component uint8 texture on the GPU with given dimensions.
@@ -40574,6 +41379,7 @@ var Niivue = class {
     gl.uniform1i(shader.uniforms.colormap, 1);
     gl.uniform1i(shader.uniforms.overlay, 2);
     gl.uniform1i(shader.uniforms.drawing, 7);
+    gl.uniform1i(shader.uniforms.paqd, 8);
     gl.uniform1f(shader.uniforms.drawOpacity, this.drawOpacity);
     this.customSliceShader = shader;
     this.updateGLVolume();
@@ -40615,6 +41421,7 @@ var Niivue = class {
     this.gl.uniform1i(shader.uniforms.colormap, 1);
     this.gl.uniform1i(shader.uniforms.overlay, 2);
     this.gl.uniform1i(shader.uniforms.drawing, 7);
+    this.gl.uniform1i(shader.uniforms.paqd, 8);
     this.gl.uniform1fv(shader.uniforms.renderDrawAmbientOcclusion, [this.renderDrawAmbientOcclusion, 1]);
     this.gl.uniform1f(shader.uniforms.gradientAmount, gradientAmount);
     this.gl.uniform1f(shader.uniforms.silhouettePower, this.opts.renderSilhouette);
@@ -40646,7 +41453,6 @@ var Niivue = class {
     }
     const glInfo = this.gl.getParameter(this.gl.RENDERER);
     log.info("firefox renderer: ", glInfo);
-    this.gl.clearDepth(0);
     this.gl.enable(this.gl.CULL_FACE);
     this.gl.cullFace(this.gl.FRONT);
     this.gl.enable(this.gl.BLEND);
@@ -40654,6 +41460,7 @@ var Niivue = class {
     this.volumeTexture = this.rgbaTex(this.volumeTexture, TEXTURE0_BACK_VOL, [2, 2, 2, 2], true);
     this.overlayTexture = this.rgbaTex(this.overlayTexture, TEXTURE2_OVERLAY_VOL, [2, 2, 2, 2], true);
     this.drawTexture = this.r8Tex(this.drawTexture, TEXTURE7_DRAW, [2, 2, 2, 2], true);
+    this.paqdTexture = this.rgbaTex(this.paqdTexture, TEXTURE8_PAQD, [2, 2, 2, 2], true);
     const rectStrip = [
       1,
       1,
@@ -40761,7 +41568,7 @@ var Niivue = class {
     this.orientShaderI = new Shader(gl, vertOrientShader, fragOrientShaderI.concat(fragOrientShader));
     this.orientShaderF = new Shader(gl, vertOrientShader, fragOrientShaderF.concat(fragOrientShader));
     this.orientShaderRGBU = new Shader(gl, vertOrientShader, fragOrientShaderU.concat(fragRGBOrientShader));
-    this.orientShaderSPARQ = new Shader(gl, vertOrientShader, fragOrientShaderU.concat(fragSPARQOrientShader));
+    this.orientShaderPAQD = new Shader(gl, vertOrientShader, fragOrientShaderU.concat(fragPAQDOrientShader));
     this.surfaceShader = new Shader(gl, vertSurfaceShader, fragSurfaceShader);
     this.surfaceShader.use(gl);
     this.fiberShader = new Shader(gl, vertFiberShader, fragFiberShader);
@@ -40822,7 +41629,6 @@ var Niivue = class {
       if (status !== gl.FRAMEBUFFER_COMPLETE) {
         log.error("blur shader: ", status);
       }
-      gl.clear(gl.DEPTH_BUFFER_BIT);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
     const sobelShader = this.opts.gradientOrder === 2 ? this.sobelSecondOrderShader : this.sobelFirstOrderShader;
@@ -40854,12 +41660,13 @@ var Niivue = class {
       if (status !== gl.FRAMEBUFFER_COMPLETE) {
         log.error("sobel shader: ", status);
       }
-      gl.clear(gl.DEPTH_BUFFER_BIT);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
     gl.deleteFramebuffer(fb);
     gl.deleteTexture(tempTex3D);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.activeTexture(TEXTURE8_PAQD);
+    gl.bindTexture(gl.TEXTURE_3D, this.paqdTexture);
     this.gl.bindVertexArray(this.unusedVAO);
   }
   /**
@@ -41004,6 +41811,7 @@ var Niivue = class {
     let visibleLayers = 0;
     const numLayers = this.volumes.length;
     this.refreshColormaps();
+    this.closePAQD();
     for (let i = 0; i < numLayers; i++) {
       if (!this.volumes[i].toRAS) {
         continue;
@@ -41145,9 +41953,6 @@ var Niivue = class {
           }
         }
       }
-      const voxelArea = pixDimsRAS[varDims[0] + 1] * pixDimsRAS[varDims[1] + 1];
-      const numMaskedVoxels = mask.reduce((count, value) => count + (value === 1 ? 1 : 0), 0);
-      area = numMaskedVoxels * voxelArea;
       const radiusX_mm = radiusX * pixDimsRAS[varDims[0] + 1];
       const radiusY_mm = radiusY * pixDimsRAS[varDims[1] + 1];
       const areaEllipse = Math.PI * radiusX_mm * radiusY_mm;
@@ -41177,7 +41982,7 @@ var Niivue = class {
       Mnext = MNot0 + (x - MNot0) / kNot0;
       SNot0 = SNot0 + (x - MNot0) * (x - Mnext);
       MNot0 = Mnext;
-      mn = Math.min(x, mx);
+      mn = Math.min(x, mn);
       mx = Math.max(x, mx);
     }
     const stdev = Math.sqrt(S / (k - 1));
@@ -41185,7 +41990,7 @@ var Niivue = class {
     const mnNot0 = mn;
     const mxNot0 = mx;
     if (k !== kNot0) {
-      mn = Math.min(0, mx);
+      mn = Math.min(0, mn);
       mx = Math.max(0, mx);
     }
     return {
@@ -41479,7 +42284,22 @@ var Niivue = class {
     } else if (hdr.datatypeCode === 2304 /* DT_RGBA32 */) {
       orientShader = this.orientShaderRGBU;
       if (overlayItem.colormapLabel) {
-        orientShader = this.orientShaderSPARQ;
+        orientShader = this.orientShaderPAQD;
+        let firstPAQD = true;
+        for (let l = 0; l < layer; l++) {
+          const isRGBA = this.volumes[l].hdr.datatypeCode === 2304 /* DT_RGBA32 */;
+          const isLabel = !!this.volumes[l].colormapLabel;
+          if (isRGBA && isLabel) {
+            firstPAQD = false;
+          }
+        }
+        if (firstPAQD) {
+          this.paqdTexture = this.rgbaTex(this.paqdTexture, TEXTURE8_PAQD, this.back.dims);
+        } else {
+          log.warn(`Current version only one probabilistic atlas (PAQD) at a time`);
+        }
+        outTexture = this.paqdTexture;
+        this.gl.activeTexture(TEXTURE9_ORIENT);
       }
       orientShader.use(this.gl);
       this.gl.uniform1i(orientShader.uniforms.hasAlpha, 1);
@@ -41791,6 +42611,10 @@ var Niivue = class {
     } else {
       this.gl.bindTexture(this.gl.TEXTURE_3D, this.drawTexture);
     }
+    this.gl.uniform4fv(shader.uniforms.paqdUniforms, this.opts.paqdUniforms);
+    this.gl.uniform1i(shader.uniforms.paqd, 8);
+    this.gl.activeTexture(TEXTURE8_PAQD);
+    this.gl.bindTexture(this.gl.TEXTURE_3D, this.paqdTexture);
     this.updateInterpolation(layer);
   }
   /**
@@ -42195,7 +43019,6 @@ var Niivue = class {
         src_max = volume.cal_max;
         const scale7 = (dst_max - dst_min) / (src_max - src_min);
         log.info(" Robust Rescale:  min: " + src_min + "  max: " + src_max + " scale: " + scale7);
-        console.log("Robust Rescale:  min: " + src_min + "  max: " + src_max + " scale: " + scale7);
         return [src_min, scale7];
       }
     }
@@ -43121,23 +43944,43 @@ var Niivue = class {
           this.createOnLocationChange(axCorSag);
           return;
         } else {
-          if (isNaN(this.drawPenLocation[0])) {
-            this.drawPenAxCorSag = axCorSag;
-            this.drawPenFillPts = [];
-            this.drawPt(...pt, this.opts.penValue);
-          } else {
-            if (pt[0] === this.drawPenLocation[0] && pt[1] === this.drawPenLocation[1] && pt[2] === this.drawPenLocation[2]) {
-              this.drawScene();
-              this.createOnLocationChange(axCorSag);
-              return;
+          if (this.opts.penType === 0 /* PEN */) {
+            if (isNaN(this.drawPenLocation[0])) {
+              this.drawPenAxCorSag = axCorSag;
+              this.drawPenFillPts = [];
+              this.drawPt(...pt, this.opts.penValue);
+            } else {
+              if (pt[0] === this.drawPenLocation[0] && pt[1] === this.drawPenLocation[1] && pt[2] === this.drawPenLocation[2]) {
+                this.drawScene();
+                this.createOnLocationChange(axCorSag);
+                return;
+              }
+              this.drawPenLine(pt, this.drawPenLocation, this.opts.penValue);
             }
-            this.drawPenLine(pt, this.drawPenLocation, this.opts.penValue);
+            this.drawPenLocation = pt;
+            if (this.opts.isFilledPen) {
+              this.drawPenFillPts.push(pt);
+            }
+            this.refreshDrawing(false, false);
+          } else if (this.opts.penType === 1 /* RECTANGLE */ || this.opts.penType === 2 /* ELLIPSE */) {
+            if (isNaN(this.drawShapeStartLocation[0])) {
+              this.drawPenAxCorSag = axCorSag;
+              this.drawShapeStartLocation = [...pt];
+              if (this.drawBitmap) {
+                this.drawShapePreviewBitmap = this.drawBitmap.slice();
+              }
+            } else {
+              if (this.drawShapePreviewBitmap && this.drawBitmap) {
+                this.drawBitmap.set(this.drawShapePreviewBitmap);
+                if (this.opts.penType === 1 /* RECTANGLE */) {
+                  this.drawRectangleMask(this.drawShapeStartLocation, pt, this.opts.penValue);
+                } else if (this.opts.penType === 2 /* ELLIPSE */) {
+                  this.drawEllipseMask(this.drawShapeStartLocation, pt, this.opts.penValue);
+                }
+                this.refreshDrawing(false, false);
+              }
+            }
           }
-          this.drawPenLocation = pt;
-          if (this.opts.isFilledPen) {
-            this.drawPenFillPts.push(pt);
-          }
-          this.refreshDrawing(false, false);
         }
       }
       this.drawScene();
@@ -43165,13 +44008,20 @@ var Niivue = class {
     if (ltwh.length < 4) {
       return;
     }
+    const [regionX, regionY, regionW, regionH] = this.getBoundsRegion();
     const frac10cm = 100 / fovMM[0];
     const pix10cm = frac10cm * ltwh[2];
     const pix1cm = Math.max(Math.round(pix10cm * 0.1), 2);
-    const pixLeft = Math.floor(ltwh[0] + 0.5 * ltwh[2] - 0.5 * pix10cm);
     const thick = Number(this.opts.rulerWidth);
+    const pixLeft = Math.floor(ltwh[0] + 0.5 * ltwh[2] - 0.5 * pix10cm);
     const pixTop = Math.floor(ltwh[1] + ltwh[3] - pix1cm) + 0.5 * thick;
-    const startXYendXY = [pixLeft, pixTop, pixLeft + pix10cm, pixTop];
+    const clippedLeft = Math.max(regionX, pixLeft);
+    const clippedRight = Math.min(regionX + regionW, pixLeft + pix10cm);
+    const clippedY = Math.min(regionY + regionH, pixTop);
+    if (clippedRight <= clippedLeft) {
+      return;
+    }
+    const startXYendXY = [clippedLeft, clippedY, clippedRight, clippedY];
     let outlineColor = [0, 0, 0, 1];
     if (this.opts.rulerColor[0] + this.opts.rulerColor[1] + this.opts.rulerColor[2] < 0.8) {
       outlineColor = [1, 1, 1, 1];
@@ -43312,6 +44162,7 @@ var Niivue = class {
       };
     }
     const gl = this.gl;
+    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
     gl.bindVertexArray(this.genericVAO);
     gl.depthFunc(gl.ALWAYS);
     gl.enable(gl.BLEND);
@@ -43407,18 +44258,6 @@ var Niivue = class {
         false
       );
       this.drawAngleText();
-    } else if (this.uiData.angleState === "complete") {
-      this.drawMeasurementTool(this.uiData.angleFirstLine, false);
-      const secondLine = [
-        this.uiData.angleFirstLine[2],
-        // start from end of first line
-        this.uiData.angleFirstLine[3],
-        this.uiData.dragEnd[0],
-        // to final position
-        this.uiData.dragEnd[1]
-      ];
-      this.drawMeasurementTool(secondLine, false);
-      this.drawAngleText();
     }
   }
   /**
@@ -43439,6 +44278,22 @@ var Niivue = class {
     const intersectionX = this.uiData.angleFirstLine[2];
     const intersectionY = this.uiData.angleFirstLine[3];
     const angleText = `${angle3.toFixed(1)}\xB0`;
+    this.drawTextBetween(
+      [intersectionX, intersectionY, intersectionX + 1, intersectionY + 1],
+      angleText,
+      this.opts.measureTextHeight / 0.06,
+      this.opts.measureTextColor
+    );
+  }
+  /**
+   * Calculate and draw angle text for a completed angle.
+   * @internal
+   */
+  drawAngleTextForAngle(angle3) {
+    const angle_degrees = this.calculateAngleBetweenLines(angle3.firstLine, angle3.secondLine);
+    const intersectionX = angle3.firstLine[2];
+    const intersectionY = angle3.firstLine[3];
+    const angleText = `${angle_degrees.toFixed(1)}\xB0`;
     this.drawTextBetween(
       [intersectionX, intersectionY, intersectionX + 1, intersectionY + 1],
       angleText,
@@ -43475,6 +44330,121 @@ var Niivue = class {
   resetAngleMeasurement() {
     this.uiData.angleState = "none";
     this.uiData.angleFirstLine = [0, 0, 0, 0];
+  }
+  /**
+   * Get slice information for the current measurement/angle.
+   * @internal
+   */
+  getCurrentSliceInfo() {
+    const tileIdx = this.tileIndex(this.uiData.dragStart[0], this.uiData.dragStart[1]);
+    if (tileIdx >= 0 && tileIdx < this.screenSlices.length) {
+      const sliceType = this.screenSlices[tileIdx].axCorSag;
+      let slicePosition2 = 0;
+      if (sliceType === 0 /* AXIAL */) {
+        slicePosition2 = this.scene.crosshairPos[2];
+      } else if (sliceType === 1 /* CORONAL */) {
+        slicePosition2 = this.scene.crosshairPos[1];
+      } else if (sliceType === 2 /* SAGITTAL */) {
+        slicePosition2 = this.scene.crosshairPos[0];
+      }
+      return {
+        sliceIndex: tileIdx,
+        sliceType,
+        slicePosition: slicePosition2
+      };
+    }
+    const currentSliceType = this.opts.sliceType;
+    let slicePosition = 0;
+    if (currentSliceType === 0 /* AXIAL */) {
+      slicePosition = this.scene.crosshairPos[2];
+    } else if (currentSliceType === 1 /* CORONAL */) {
+      slicePosition = this.scene.crosshairPos[1];
+    } else if (currentSliceType === 2 /* SAGITTAL */) {
+      slicePosition = this.scene.crosshairPos[0];
+    } else if (currentSliceType === 3 /* MULTIPLANAR */) {
+      const startFrac = this.canvasPos2frac([this.uiData.dragStart[0], this.uiData.dragStart[1]]);
+      if (startFrac[0] >= 0) {
+        slicePosition = this.scene.crosshairPos[2];
+      }
+    }
+    return { sliceIndex: -1, sliceType: currentSliceType, slicePosition };
+  }
+  /**
+   * Get the current slice position based on slice type.
+   * @internal
+   */
+  getCurrentSlicePosition(sliceType) {
+    if (sliceType === 0 /* AXIAL */) {
+      return this.scene.crosshairPos[2];
+    } else if (sliceType === 1 /* CORONAL */) {
+      return this.scene.crosshairPos[1];
+    } else if (sliceType === 2 /* SAGITTAL */) {
+      return this.scene.crosshairPos[0];
+    }
+    return 0;
+  }
+  /**
+   * Check if a measurement/angle should be drawn on the current slice.
+   * @internal
+   */
+  shouldDrawOnCurrentSlice(sliceIndex, sliceType, slicePosition) {
+    if (this.opts.sliceType === 3 /* MULTIPLANAR */) {
+      if (sliceType > 2 /* SAGITTAL */) {
+        return false;
+      }
+      for (let i = 0; i < this.screenSlices.length; i++) {
+        if (this.screenSlices[i].axCorSag === sliceType) {
+          const currentSlicePosition2 = this.getCurrentSlicePosition(sliceType);
+          const tolerance2 = 1e-3;
+          const difference2 = Math.abs(currentSlicePosition2 - slicePosition);
+          if (difference2 < tolerance2) {
+            return true;
+          }
+        }
+      }
+      return false;
+    } else if (this.opts.sliceType !== sliceType) {
+      return false;
+    }
+    const currentSlicePosition = this.getCurrentSlicePosition(sliceType);
+    const tolerance = 1e-3;
+    const difference = Math.abs(currentSlicePosition - slicePosition);
+    const result = difference < tolerance;
+    return result;
+  }
+  /**
+   * Clear all persistent measurement lines from the canvas.
+   * @example
+   * ```js
+   * nv.clearMeasurements()
+   * ```
+   */
+  clearMeasurements() {
+    this.document.completedMeasurements = [];
+    this.drawScene();
+  }
+  /**
+   * Clear all persistent angle measurements from the canvas.
+   * @example
+   * ```js
+   * nv.clearAngles()
+   * ```
+   */
+  clearAngles() {
+    this.document.completedAngles = [];
+    this.drawScene();
+  }
+  /**
+   * Clear all persistent measurements and angles from the canvas.
+   * @example
+   * ```js
+   * nv.clearAllMeasurements()
+   * ```
+   */
+  clearAllMeasurements() {
+    this.document.completedMeasurements = [];
+    this.document.completedAngles = [];
+    this.drawScene();
   }
   /**
    * Set the drag mode for mouse interactions.
@@ -43517,6 +44487,56 @@ var Niivue = class {
     if (this.opts.dragMode !== 7 /* angle */) {
       this.resetAngleMeasurement();
     }
+    this.clearActiveDragMode();
+  }
+  /**
+   * Set custom mouse event configuration for button mappings.
+   * @param config - Mouse event configuration object
+   * @example
+   * ```js
+   * nv.setMouseEventConfig({
+   *   leftButton: {
+   *     primary: DRAG_MODE.windowing,
+   *     withShift: DRAG_MODE.measurement,
+   *     withCtrl: DRAG_MODE.crosshair
+   *   },
+   *   rightButton: DRAG_MODE.crosshair,
+   *   centerButton: DRAG_MODE.pan
+   * })
+   * ```
+   */
+  setMouseEventConfig(config) {
+    this.opts.mouseEventConfig = config;
+    this.clearActiveDragMode();
+  }
+  /**
+   * Set custom touch event configuration for touch gesture mappings.
+   * @param config - Touch event configuration object
+   * @example
+   * ```js
+   * nv.setTouchEventConfig({
+   *   singleTouch: DRAG_MODE.windowing,
+   *   doubleTouch: DRAG_MODE.pan
+   * })
+   * ```
+   */
+  setTouchEventConfig(config) {
+    this.opts.touchEventConfig = config;
+    this.clearActiveDragMode();
+  }
+  /**
+   * Get current mouse event configuration.
+   * @returns Current mouse event configuration or undefined if using defaults
+   */
+  getMouseEventConfig() {
+    return this.opts.mouseEventConfig;
+  }
+  /**
+   * Get current touch event configuration.
+   * @returns Current touch event configuration or undefined if using defaults
+   */
+  getTouchEventConfig() {
+    return this.opts.touchEventConfig;
   }
   /**
    * Draw a rectangle or outline at given position with specified color or default crosshair color.
@@ -43566,6 +44586,23 @@ var Niivue = class {
       this.gl.bindVertexArray(this.unusedVAO);
     }
   }
+  drawBoundsBox(leftTopWidthHeight, color, thickness = 2) {
+    if (!this.rectOutlineShader) {
+      throw new Error("rectOutlineShader undefined");
+    }
+    const gl = this.gl;
+    const [x, y, w, h] = leftTopWidthHeight;
+    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+    this.rectOutlineShader.use(gl);
+    gl.enable(gl.BLEND);
+    gl.uniform1f(this.rectOutlineShader.uniforms.thickness, thickness);
+    gl.uniform4fv(this.rectOutlineShader.uniforms.lineColor, color);
+    gl.uniform2fv(this.rectOutlineShader.uniforms.canvasWidthHeight, [gl.canvas.width, gl.canvas.height]);
+    gl.uniform4f(this.rectOutlineShader.uniforms.leftTopWidthHeight, x, y, w, h);
+    gl.bindVertexArray(this.genericVAO);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindVertexArray(this.unusedVAO);
+  }
   /**
    * Draw a circle or outline at given position with specified color or default crosshair color.
    * @internal
@@ -43596,7 +44633,8 @@ var Niivue = class {
    * @internal
    */
   drawSelectionBox(leftTopWidthHeight) {
-    if (this.opts.dragMode === 6 /* roiSelection */) {
+    this.gl.viewport(0, 0, this.gl.canvas.width, this.gl.canvas.height);
+    if (this.getCurrentDragMode() === 6 /* roiSelection */) {
       this.drawCircle(leftTopWidthHeight, this.opts.selectionBoxColor, 0.1);
       return;
     }
@@ -43607,14 +44645,26 @@ var Niivue = class {
    * @internal
    */
   effectiveCanvasHeight() {
-    return this.gl.canvas.height - this.colorbarHeight;
+    let regionH = this.gl.canvas.height;
+    if (this.opts.bounds) {
+      const [[, y1], [, y2]] = this.opts.bounds;
+      const yTop = Math.round(y1 * this.gl.canvas.height);
+      const yBot = Math.round(y2 * this.gl.canvas.height);
+      regionH = yBot - yTop;
+    }
+    return regionH - this.colorbarHeight;
   }
   /**
    * Get canvas width available for tiles (excludes legend panel).
    * @internal
    */
   effectiveCanvasWidth() {
-    return this.gl.canvas.width - this.getLegendPanelWidth();
+    let regionW = this.gl.canvas.width;
+    if (this.opts.bounds) {
+      const [[x1], [x2]] = this.opts.bounds;
+      regionW = Math.round((x2 - x1) * this.gl.canvas.width);
+    }
+    return regionW - this.getLegendPanelWidth();
   }
   /**
    * Get all 3D labels from document and connectome meshes.
@@ -43726,7 +44776,8 @@ var Niivue = class {
     return height;
   }
   /**
-   * Calculate and reserve canvas area for colorbar panel.
+   * Calculate and reserve canvas area for colorbar panel,
+   * respecting opts.bounds if defined.
    * @internal
    */
   reserveColorbarPanel() {
@@ -43734,12 +44785,14 @@ var Niivue = class {
     if (fullHt < 0) {
       return [0, 0, 0, 0];
     }
+    const [regionX, regionY, regionW, regionH] = this.getBoundsRegion();
     const widthPercentage = this.opts.colorbarWidth > 0 && this.opts.colorbarWidth <= 1 ? this.opts.colorbarWidth : 1;
-    const width = widthPercentage * this.gl.canvas.width;
+    const width = widthPercentage * regionW;
     const leftTopWidthHeight = [
-      (this.gl.canvas.width - width) / 2,
-      // Center the colorbar horizontally
-      this.gl.canvas.height - fullHt,
+      regionX + (regionW - width) / 2,
+      // center within region
+      regionY + regionH - fullHt,
+      // top within region
       width,
       fullHt
     ];
@@ -43942,10 +44995,13 @@ var Niivue = class {
     if (!this.canvas) {
       throw new Error("canvas undefined");
     }
-    this.gl.viewport(0, 0, this.gl.canvas.width, this.gl.canvas.height);
+    const [regionX, regionY, regionW, regionH] = this.getBoundsRegion();
+    this.gl.viewport(regionX, regionY, regionW, regionH);
     this.gl.enable(this.gl.CULL_FACE);
     this.gl.enable(this.gl.BLEND);
-    this.drawTextBelow([this.canvas.width / 2, this.canvas.height / 2], text, 3);
+    const cx = regionX + regionW / 2;
+    const cy = regionY + regionH / 2;
+    this.drawTextBelow([cx, cy], text, 3);
   }
   /**
    * Render a string of text at specified canvas coordinates with scaling and optional color.
@@ -44057,6 +45113,30 @@ var Niivue = class {
     xy[0] -= 0.5 * this.textWidth(size, str6);
     xy[0] = Math.max(xy[0], 1);
     xy[0] = Math.min(xy[0], this.canvas.width - width - 1);
+    this.drawText(xy, str6, scale6, color);
+  }
+  /**
+   * Draw text horizontally centered above the given coordinates.
+   * @internal
+   */
+  drawTextAbove(xy, str6, scale6 = 1, color = null) {
+    if (this.fontPx <= 0) {
+      return;
+    }
+    if (!this.canvas) {
+      throw new Error("canvas undefined");
+    }
+    let size = this.fontPx * scale6;
+    let width = this.textWidth(size, str6);
+    if (width > this.canvas.width) {
+      scale6 *= (this.canvas.width - 2) / width;
+      size = this.fontPx * scale6;
+      width = this.textWidth(size, str6);
+    }
+    xy[0] -= 0.5 * this.textWidth(size, str6);
+    xy[0] = Math.max(xy[0], 1);
+    xy[0] = Math.min(xy[0], this.canvas.width - width - 1);
+    xy[1] -= size;
     this.drawText(xy, str6, scale6, color);
   }
   /**
@@ -44275,12 +45355,22 @@ var Niivue = class {
     if (axCorSag === 2 /* SAGITTAL */) {
       leftText = this.opts.sagittalNoseLeft ? "A" : "P";
     }
+    let bottomText = "I";
+    if (axCorSag === 0 /* AXIAL */) {
+      bottomText = "P";
+    }
+    let rightText = this.opts.isRadiologicalConvention ? "L" : "R";
+    if (axCorSag === 2 /* SAGITTAL */) {
+      rightText = this.opts.sagittalNoseLeft ? "P" : "A";
+    }
     if (this.opts.isCornerOrientationText) {
       this.drawTextRightBelow([leftTopWidthHeight[0], leftTopWidthHeight[1]], leftText + topText);
       return;
     }
     let drawBelow = true;
     let drawRight = true;
+    const drawAbove = this.opts.showAllOrientationMarkers;
+    const drawLeft = this.opts.showAllOrientationMarkers;
     if (!isNaN(padLeftTop[0])) {
       const ht = this.fontPx + 2;
       if (padLeftTop[1] > ht) {
@@ -44304,6 +45394,18 @@ var Niivue = class {
     }
     if (drawRight) {
       this.drawTextRight([leftTopWidthHeight[0], leftTopWidthHeight[1] + leftTopWidthHeight[3] * 0.5], leftText);
+    }
+    if (drawAbove) {
+      this.drawTextAbove(
+        [leftTopWidthHeight[0] + leftTopWidthHeight[2] * 0.5, leftTopWidthHeight[1] + leftTopWidthHeight[3]],
+        bottomText
+      );
+    }
+    if (drawLeft) {
+      this.drawTextLeft(
+        [leftTopWidthHeight[0] + leftTopWidthHeight[2], leftTopWidthHeight[1] + leftTopWidthHeight[3] * 0.5],
+        rightText
+      );
     }
   }
   /**
@@ -44426,7 +45528,15 @@ var Niivue = class {
       sliceFrac = frac[sliceDim];
     }
     const sliceMM = mm[sliceDim];
-    gl.clear(gl.DEPTH_BUFFER_BIT);
+    const flippedY = gl.canvas.height - leftTopWidthHeight[1] - leftTopWidthHeight[3];
+    const glLTWH = [
+      leftTopWidthHeight[0],
+      flippedY,
+      leftTopWidthHeight[2],
+      leftTopWidthHeight[3]
+    ];
+    this.clearBounds(gl.DEPTH_BUFFER_BIT, glLTWH);
+    gl.viewport(glLTWH[0], glLTWH[1], glLTWH[2], glLTWH[3]);
     let obj = this.calculateMvpMatrix2D(
       leftTopWidthHeight,
       screen.mnMM,
@@ -44459,7 +45569,7 @@ var Niivue = class {
     gl.enable(gl.DEPTH_TEST);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.disable(gl.BLEND);
-    gl.depthFunc(gl.GREATER);
+    gl.depthFunc(gl.ALWAYS);
     gl.disable(gl.CULL_FACE);
     if (this.volumes.length > 0) {
       let shader = this.sliceMMShader;
@@ -44481,6 +45591,7 @@ var Niivue = class {
       gl.uniform1i(shader.uniforms.isAlphaClipDark, this.isAlphaClipDark ? 1 : 0);
       gl.uniform1i(shader.uniforms.backgroundMasksOverlays, this.backgroundMasksOverlays);
       gl.uniform1f(shader.uniforms.drawOpacity, this.drawOpacity);
+      gl.uniform1f(shader.uniforms.drawRimOpacity, this.drawRimOpacity);
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
       gl.uniform1f(shader.uniforms.opacity, this.volumes[0].opacity);
@@ -44506,6 +45617,8 @@ var Niivue = class {
         fovMM: obj.fovMM
       });
     }
+    gl.depthMask(true);
+    gl.depthFunc(gl.LEQUAL);
     if (isNaN(customMM)) {
       this.drawCrosshairs3D(true, 1, obj.modelViewProjectionMatrix, true, this.opts.isSliceMM);
     }
@@ -44546,23 +45659,33 @@ var Niivue = class {
    * @internal
    */
   draw2D(leftTopWidthHeight, axCorSag, customMM = NaN, imageWidthHeight = [NaN, NaN]) {
+    const [regionX, regionY, regionW, regionH] = this.getBoundsRegion();
+    let ltwh;
+    if (leftTopWidthHeight[2] === 0 && leftTopWidthHeight[3] === 0) {
+      if (!this.opts.bounds) {
+        ltwh = [0, 0, this.gl.canvas.width, this.gl.canvas.height];
+      } else {
+        ltwh = [regionX, regionY, regionW, regionH];
+      }
+    } else {
+      ltwh = leftTopWidthHeight.slice();
+    }
     const padLeftTop = [NaN, NaN];
     if (imageWidthHeight[0] === Infinity) {
       const volScale = this.sliceScale().volScale;
-      let scale6 = this.scaleSlice(volScale[0], volScale[1], [0, 0], [leftTopWidthHeight[2], leftTopWidthHeight[3]]);
+      let scale6 = this.scaleSlice(volScale[0], volScale[1], [0, 0], [ltwh[2], ltwh[3]]);
       if (axCorSag === 1 /* CORONAL */) {
-        scale6 = this.scaleSlice(volScale[0], volScale[2], [0, 0], [leftTopWidthHeight[2], leftTopWidthHeight[3]]);
+        scale6 = this.scaleSlice(volScale[0], volScale[2], [0, 0], [ltwh[2], ltwh[3]]);
       }
       if (axCorSag === 2 /* SAGITTAL */) {
-        scale6 = this.scaleSlice(volScale[1], volScale[2], [0, 0], [leftTopWidthHeight[2], leftTopWidthHeight[3]]);
+        scale6 = this.scaleSlice(volScale[1], volScale[2], [0, 0], [ltwh[2], ltwh[3]]);
       }
       imageWidthHeight[0] = scale6[2];
       imageWidthHeight[1] = scale6[3];
     }
     if (isNaN(imageWidthHeight[0])) {
-      this.draw2DMain(leftTopWidthHeight, axCorSag, customMM);
+      this.draw2DMain(ltwh, axCorSag, customMM);
     } else {
-      const ltwh = leftTopWidthHeight.slice();
       padLeftTop[0] = Math.floor(0.5 * (ltwh[2] - imageWidthHeight[0]));
       padLeftTop[1] = Math.floor(0.5 * (ltwh[3] - imageWidthHeight[1]));
       ltwh[0] += padLeftTop[0];
@@ -44574,17 +45697,22 @@ var Niivue = class {
     if (customMM === Infinity || customMM === -Infinity || axCorSag === 4 /* RENDER */) {
       return;
     }
-    if (leftTopWidthHeight[2] !== 0 && leftTopWidthHeight[3] !== 0 && this.opts.isOrientationTextVisible) {
-      this.drawSliceOrientationText(leftTopWidthHeight, axCorSag, padLeftTop);
+    if (ltwh[2] !== 0 && ltwh[3] !== 0 && this.opts.isOrientationTextVisible) {
+      this.drawSliceOrientationText(ltwh, axCorSag, padLeftTop);
     }
   }
   /**
-   * Computes 3D model-view-projection matrices based on view angles and canvas size.
-   * @internal
+   * Build MVP, Model, and Normal matrices for rendering.
+   * @param _unused - reserved
+   * @param leftTopWidthHeight - viewport rectangle [x, y, w, h] in device pixels
+   * @param azimuth - azimuth rotation in degrees
+   * @param elevation - elevation rotation in degrees
+   * @param flipX - whether to mirror the X axis (default true for radiological convention)
    */
-  calculateMvpMatrix(_unused, leftTopWidthHeight = [0, 0, 0, 0], azimuth, elevation) {
+  calculateMvpMatrix(_unused, leftTopWidthHeight = [0, 0, 0, 0], azimuth, elevation, flipX = true) {
+    const gl = this.gl;
     if (leftTopWidthHeight[2] === 0 || leftTopWidthHeight[3] === 0) {
-      leftTopWidthHeight = [0, 0, this.gl.canvas.width, this.gl.canvas.height];
+      leftTopWidthHeight = [0, 0, gl.canvas.width, gl.canvas.height];
     }
     const whratio = leftTopWidthHeight[2] / leftTopWidthHeight[3];
     let scale6 = this.furthestFromPivot;
@@ -44597,7 +45725,9 @@ var Niivue = class {
       mat4_exports.ortho(projectionMatrix, -scale6 * whratio, scale6 * whratio, -scale6, scale6, scale6 * 0.01, scale6 * 8);
     }
     const modelMatrix = mat4_exports.create();
-    modelMatrix[0] = -1;
+    if (flipX) {
+      modelMatrix[0] = -1;
+    }
     const translateVec3 = vec3_exports.fromValues(0, 0, -scale6 * 1.8);
     mat4_exports.translate(modelMatrix, modelMatrix, translateVec3);
     if (this.position) {
@@ -44770,8 +45900,9 @@ var Niivue = class {
       return;
     }
     const graph = this.graph;
+    const [regionX, regionY, regionW, regionH] = this.getBoundsRegion();
     let axialTop = 0;
-    if (this.graph.autoSizeMultiplanar && this.opts.sliceType === 3 /* MULTIPLANAR */) {
+    if (graph.autoSizeMultiplanar && this.opts.sliceType === 3 /* MULTIPLANAR */) {
       for (let i = 0; i < this.screenSlices.length; i++) {
         const axCorSag = this.screenSlices[i].axCorSag;
         if (axCorSag === 0 /* AXIAL */) {
@@ -44792,13 +45923,11 @@ var Niivue = class {
         graph.LTWH[3] = ltwh[2];
       }
     }
-    if (graph.opacity <= 0 || graph.LTWH[2] <= 5 || graph.LTWH[3] <= 5) {
-      return;
-    }
-    if (Math.floor(graph.LTWH[0] + graph.LTWH[2]) > this.gl.canvas.width) {
-      return;
-    }
-    if (Math.floor(graph.LTWH[1] + graph.LTWH[3]) > this.gl.canvas.height) {
+    graph.LTWH[0] = Math.max(regionX, graph.LTWH[0]);
+    graph.LTWH[1] = Math.max(regionY, graph.LTWH[1]);
+    graph.LTWH[2] = Math.min(regionW, graph.LTWH[2]);
+    graph.LTWH[3] = Math.min(regionH, graph.LTWH[3]);
+    if (graph.opacity <= 0 || graph.LTWH[2] <= 5 || graph.LTWH[3] <= 5 || Math.floor(graph.LTWH[0] + graph.LTWH[2]) > regionX + regionW || Math.floor(graph.LTWH[1] + graph.LTWH[3]) > regionY + regionH) {
       return;
     }
     graph.backColor = [0.15, 0.15, 0.15, graph.opacity];
@@ -44902,8 +46031,8 @@ var Niivue = class {
       return x.toFixed(6).replace(/\.?0*$/, "");
     }
     let fntSize = this.fontPx * 0.7;
-    const screenWidthPts = this.gl.canvas.width / this.uiData.dpr;
-    const screenHeightPts = this.gl.canvas.height / this.uiData.dpr;
+    const screenWidthPts = regionW / this.uiData.dpr;
+    const screenHeightPts = regionH / this.uiData.dpr;
     const screenAreaPts = screenWidthPts * screenHeightPts;
     const refAreaPts = 800 * 600;
     if (screenAreaPts < refAreaPts) {
@@ -45108,6 +46237,7 @@ var Niivue = class {
       } else {
         gl.uniform2f(shader.uniforms.renderDrawAmbientOcclusionXY, this.renderDrawAmbientOcclusion, 0);
       }
+      this.gl.uniform4fv(shader.uniforms.paqdUniforms, this.opts.paqdUniforms);
       gl.uniformMatrix4fv(shader.uniforms.mvpMtx, false, mvpMatrix);
       gl.uniformMatrix4fv(shader.uniforms.matRAS, false, this.back.matRAS);
       gl.uniform3fv(shader.uniforms.rayDir, rayDir);
@@ -45195,7 +46325,17 @@ var Niivue = class {
         deci = 3;
         if (this.volumes[i].colormapLabel !== null) {
           const v = Math.round(flt2);
-          if (v >= 0 && v < this.volumes[i].colormapLabel.labels.length) {
+          if (this.volumes[i].hdr.intent_code === 1002 /* NIFTI_INTENT_LABEL */ && this.volumes[i].hdr.datatypeCode === 2304 /* DT_RGBA32 */) {
+            const vals = this.volumes[i].getValues(vox[0], vox[1], vox[2], this.volumes[i].frame4D);
+            if (vals[2] > 2) {
+              const pct1 = Math.round(100 * vals[2] / 255);
+              valStr += this.volumes[i].colormapLabel.labels[vals[0]] + ` (${pct1}%)`;
+              if (vals[3] > 2) {
+                const pct2 = Math.round(100 * vals[3] / 255);
+                valStr += ` ` + this.volumes[i].colormapLabel.labels[vals[1]] + ` (${pct2}%)`;
+              }
+            }
+          } else if (v >= 0 && this.volumes[i].colormapLabel.labels && v < this.volumes[i].colormapLabel.labels.length) {
             valStr += this.volumes[i].colormapLabel.labels[v];
           } else {
             valStr += "undefined(" + flt2str(flt2, deci) + ")";
@@ -45456,7 +46596,7 @@ var Niivue = class {
     const depthFunc = gl.getParameter(gl.DEPTH_FUNC);
     if (!secondPass) {
       gl.disable(gl.BLEND);
-      gl.depthFunc(gl.GREATER);
+      gl.depthFunc(gl.LEQUAL);
     }
     for (const label of labels) {
       this.draw3DLabel(
@@ -45535,46 +46675,39 @@ var Niivue = class {
    * @internal
    */
   draw3D(leftTopWidthHeight = [0, 0, 0, 0], mvpMatrix = null, modelMatrix = null, normalMatrix = null, azimuth = null, elevation = 0) {
+    const gl = this.gl;
+    const [regionX, regionY, regionW, regionH] = this.getBoundsRegion();
+    let ltwh = [...leftTopWidthHeight];
+    if (ltwh[2] === 0 || ltwh[3] === 0) {
+      ltwh = this.opts.bounds ? [regionX, regionY, regionW, regionH] : [0, 0, gl.canvas.width, gl.canvas.height];
+    }
     const isMosaic = azimuth !== null;
     this.setPivot3D();
     if (!isMosaic) {
       azimuth = this.scene.renderAzimuth;
       elevation = this.scene.renderElevation;
     }
-    const gl = this.gl;
     if (mvpMatrix === null) {
       ;
-      [mvpMatrix, modelMatrix, normalMatrix] = this.calculateMvpMatrix(null, leftTopWidthHeight, azimuth, elevation);
+      [mvpMatrix, modelMatrix, normalMatrix] = this.calculateMvpMatrix(null, ltwh, azimuth, elevation);
     }
-    let relativeLTWH = [...leftTopWidthHeight];
-    if (leftTopWidthHeight[2] === 0 || leftTopWidthHeight[3] === 0) {
-      leftTopWidthHeight = [0, 0, gl.canvas.width, gl.canvas.height];
-      relativeLTWH = [...leftTopWidthHeight];
-      this.screenSlices.push({
-        leftTopWidthHeight,
-        axCorSag: 4 /* RENDER */,
-        sliceFrac: 0,
-        AxyzMxy: [],
-        leftTopMM: [],
-        fovMM: [isRadiological(modelMatrix), 0]
-      });
-    } else {
-      this.screenSlices.push({
-        leftTopWidthHeight: leftTopWidthHeight.slice(),
-        axCorSag: 4 /* RENDER */,
-        sliceFrac: 0,
-        AxyzMxy: [],
-        leftTopMM: [],
-        fovMM: [isRadiological(modelMatrix), 0]
-      });
-      leftTopWidthHeight[1] = gl.canvas.height - leftTopWidthHeight[3] - leftTopWidthHeight[1];
-    }
+    const relativeLTWH = [...ltwh];
+    this.screenSlices.push({
+      leftTopWidthHeight: ltwh.slice(),
+      // canvas-space
+      axCorSag: 4 /* RENDER */,
+      sliceFrac: 0,
+      AxyzMxy: [],
+      leftTopMM: [],
+      fovMM: [isRadiological(modelMatrix), 0]
+    });
+    const glLTWH = [ltwh[0], gl.canvas.height - ltwh[3] - ltwh[1], ltwh[2], ltwh[3]];
+    ltwh[1] = gl.canvas.height - ltwh[3] - ltwh[1];
     gl.enable(gl.DEPTH_TEST);
     gl.depthFunc(gl.ALWAYS);
     gl.depthMask(true);
-    gl.clearDepth(0);
     this.draw3DLabels(mvpMatrix, relativeLTWH, false);
-    gl.viewport(leftTopWidthHeight[0], leftTopWidthHeight[1], leftTopWidthHeight[2], leftTopWidthHeight[3]);
+    this.gl.viewport(glLTWH[0], glLTWH[1], glLTWH[2], glLTWH[3]);
     if (this.volumes.length > 0) {
       this.updateInterpolation(0, true);
       this.updateInterpolation(1, true);
@@ -45587,21 +46720,21 @@ var Niivue = class {
     }
     this.drawMesh3D(true, 1, mvpMatrix, modelMatrix, normalMatrix);
     if (this.uiData.mouseDepthPicker) {
-      this.depthPicker(leftTopWidthHeight, mvpMatrix);
+      this.depthPicker(ltwh, mvpMatrix);
       this.createOnLocationChange();
-      this.draw3D(leftTopWidthHeight, mvpMatrix, modelMatrix, normalMatrix, azimuth, elevation);
+      this.draw3D(relativeLTWH, mvpMatrix, modelMatrix, normalMatrix, azimuth, elevation);
       return;
     }
     if (this.opts.meshXRay > 0) {
       this.drawMesh3D(false, this.opts.meshXRay, mvpMatrix, modelMatrix, normalMatrix);
     }
     this.draw3DLabels(mvpMatrix, relativeLTWH, false);
-    gl.viewport(leftTopWidthHeight[0], leftTopWidthHeight[1], leftTopWidthHeight[2], leftTopWidthHeight[3]);
+    gl.viewport(ltwh[0], ltwh[1], ltwh[2], ltwh[3]);
     if (!isMosaic) {
       this.drawCrosshairs3D(false, 0.15, mvpMatrix);
     }
-    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
-    this.drawOrientationCube(leftTopWidthHeight, azimuth, elevation);
+    gl.viewport(regionX, regionY, regionW, regionH);
+    this.drawOrientationCube(ltwh, azimuth, elevation);
     const posString = "azimuth: " + this.scene.renderAzimuth.toFixed(0) + " elevation: " + this.scene.renderElevation.toFixed(0);
     this.readyForSync = true;
     this.sync();
@@ -45623,56 +46756,45 @@ var Niivue = class {
         this.volumeObject3D,
         void 0,
         this.scene.renderAzimuth,
-        this.scene.renderElevation
+        this.scene.renderElevation,
+        false
+        // no flipX for meshes
       );
     }
     gl.enable(gl.DEPTH_TEST);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    gl.disable(gl.BLEND);
-    gl.depthFunc(gl.GREATER);
-    gl.disable(gl.CULL_FACE);
     if (isDepthTest) {
+      gl.clearDepth(0);
+      gl.clear(gl.DEPTH_BUFFER_BIT);
       gl.depthFunc(gl.GREATER);
     } else {
-      gl.enable(gl.BLEND);
       gl.depthFunc(gl.ALWAYS);
-      gl.enable(gl.CULL_FACE);
     }
+    gl.enable(gl.CULL_FACE);
     gl.cullFace(gl.BACK);
-    let shader = this.meshShaders[0].shader;
+    gl.frontFace(gl.CCW);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     let hasFibers = false;
-    for (let i = 0; i < this.meshes.length; i++) {
-      if (this.meshes[i].visible === false || this.meshes[i].opacity <= 0) {
+    for (const mesh of this.meshes) {
+      if (!mesh.visible || mesh.opacity <= 0 || mesh.indexCount < 3) {
         continue;
       }
-      let meshAlpha = alpha;
-      if (isDepthTest) {
-        meshAlpha = this.meshes[i].opacity;
-        gl.depthFunc(gl.GREATER);
-        gl.depthMask(true);
-        if (meshAlpha < 1) {
-          gl.depthMask(false);
-          gl.enable(gl.DEPTH_TEST);
-          gl.enable(gl.BLEND);
-          gl.cullFace(gl.BACK);
-          gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-        } else {
-          gl.enable(gl.DEPTH_TEST);
-          gl.disable(gl.BLEND);
-        }
-      }
-      shader = this.meshShaders[this.meshes[i].meshShaderIndex].shader;
+      const meshAlpha = mesh.opacity * alpha;
+      let shader = this.meshShaders[mesh.meshShaderIndex].shader;
       if (this.uiData.mouseDepthPicker) {
         shader = this.pickingMeshShader;
       }
-      shader.use(this.gl);
+      shader.use(gl);
       gl.uniformMatrix4fv(shader.uniforms.mvpMtx, false, m);
       gl.uniformMatrix4fv(shader.uniforms.normMtx, false, normMtx);
       gl.uniform1f(shader.uniforms.opacity, meshAlpha);
-      if (this.meshes[i].indexCount < 3) {
-        continue;
+      if (meshAlpha >= 1) {
+        gl.disable(gl.BLEND);
+        gl.depthMask(true);
+      } else {
+        gl.enable(gl.BLEND);
+        gl.depthMask(false);
       }
-      if (this.meshes[i].offsetPt0 && (this.meshes[i].fiberSides < 3 || this.meshes[i].fiberRadius <= 0)) {
+      if (mesh.offsetPt0 && (mesh.fiberSides < 3 || mesh.fiberRadius <= 0)) {
         hasFibers = true;
         continue;
       }
@@ -45680,36 +46802,50 @@ var Niivue = class {
         gl.activeTexture(TEXTURE5_MATCAP);
         gl.bindTexture(gl.TEXTURE_2D, this.matCapTexture);
       }
-      gl.bindVertexArray(this.meshes[i].vao);
-      gl.drawElements(gl.TRIANGLES, this.meshes[i].indexCount, gl.UNSIGNED_INT, 0);
+      gl.bindVertexArray(mesh.vao);
+      gl.drawElements(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0);
       gl.bindVertexArray(this.unusedVAO);
     }
     gl.depthMask(true);
-    if (!hasFibers) {
+    gl.disable(gl.BLEND);
+    if (this.opts.meshXRay > 0) {
       gl.enable(gl.BLEND);
+      gl.depthMask(false);
       gl.depthFunc(gl.ALWAYS);
-      return;
+      for (const mesh of this.meshes) {
+        if (!mesh.visible || mesh.indexCount < 3) {
+          continue;
+        }
+        const shader = this.meshShaders[mesh.meshShaderIndex].shader;
+        shader.use(gl);
+        gl.uniformMatrix4fv(shader.uniforms.mvpMtx, false, m);
+        gl.uniformMatrix4fv(shader.uniforms.normMtx, false, normMtx);
+        gl.uniform1f(shader.uniforms.opacity, mesh.opacity * alpha * this.opts.meshXRay);
+        gl.bindVertexArray(mesh.vao);
+        gl.drawElements(gl.TRIANGLES, mesh.indexCount, gl.UNSIGNED_INT, 0);
+        gl.bindVertexArray(this.unusedVAO);
+      }
+      gl.depthMask(true);
+      gl.depthFunc(gl.GREATER);
+      gl.disable(gl.BLEND);
     }
-    shader = this.fiberShader;
-    shader.use(this.gl);
-    gl.uniformMatrix4fv(shader.uniforms.mvpMtx, false, m);
-    gl.uniform1f(shader.uniforms.opacity, alpha);
-    for (let i = 0; i < this.meshes.length; i++) {
-      if (this.meshes[i].indexCount < 3) {
-        continue;
+    if (hasFibers) {
+      const shader = this.fiberShader;
+      shader.use(gl);
+      gl.uniformMatrix4fv(shader.uniforms.mvpMtx, false, m);
+      gl.uniform1f(shader.uniforms.opacity, alpha);
+      for (const mesh of this.meshes) {
+        if (!mesh.offsetPt0) {
+          continue;
+        }
+        if (mesh.fiberSides >= 3 && mesh.fiberRadius > 0) {
+          continue;
+        }
+        gl.bindVertexArray(mesh.vaoFiber);
+        gl.drawElements(gl.LINE_STRIP, mesh.indexCount, gl.UNSIGNED_INT, 0);
+        gl.bindVertexArray(this.unusedVAO);
       }
-      if (!this.meshes[i].offsetPt0) {
-        continue;
-      }
-      if (this.meshes[i].fiberSides >= 3 && this.meshes[i].fiberRadius > 0) {
-        continue;
-      }
-      gl.bindVertexArray(this.meshes[i].vaoFiber);
-      gl.drawElements(gl.LINE_STRIP, this.meshes[i].indexCount, gl.UNSIGNED_INT, 0);
-      gl.bindVertexArray(this.unusedVAO);
     }
-    gl.enable(gl.BLEND);
-    gl.depthFunc(gl.ALWAYS);
     this.readyForSync = true;
   }
   /**
@@ -45938,6 +47074,151 @@ var Niivue = class {
     return [-1, -1, -1];
   }
   /**
+   * Convert fractional volume coordinates to canvas pixel coordinates.
+   * Returns the first valid screen slice that contains the fractional coordinates.
+   * @internal
+   */
+  /**
+   * Convert fractional volume coordinates to canvas pixel coordinates with tile information.
+   * Returns both canvas position and the tile index for validation.
+   * @internal
+   */
+  frac2canvasPosWithTile(frac, preferredSliceType) {
+    const worldMM = this.frac2mm(frac);
+    let bestMatch = { index: -1, distance: Infinity };
+    for (let i = 0; i < this.screenSlices.length; i++) {
+      const axCorSag = this.screenSlices[i].axCorSag;
+      if (axCorSag > 2 /* SAGITTAL */) {
+        continue;
+      }
+      if (this.screenSlices[i].AxyzMxy.length < 4) {
+        continue;
+      }
+      if (preferredSliceType !== void 0 && axCorSag !== preferredSliceType) {
+        continue;
+      }
+      let xyzMM = vec3_exports.fromValues(worldMM[0], worldMM[1], worldMM[2]);
+      if (axCorSag === 1 /* CORONAL */) {
+        xyzMM = swizzleVec3(xyzMM, [0, 2, 1]);
+      }
+      if (axCorSag === 2 /* SAGITTAL */) {
+        xyzMM = swizzleVec3(xyzMM, [1, 2, 0]);
+      }
+      const v = this.screenSlices[i].AxyzMxy;
+      const expectedZ = v[2] + v[4] * (xyzMM[1] - v[1]) - v[3] * (xyzMM[0] - v[0]);
+      const distance4 = Math.abs(xyzMM[2] - expectedZ);
+      const tolerance = this.opts.sliceType === 3 /* MULTIPLANAR */ ? 1 : 0.1;
+      if (distance4 < bestMatch.distance) {
+        bestMatch = { index: i, distance: distance4 };
+      }
+      if (distance4 <= tolerance) {
+        const fracX = (xyzMM[0] - this.screenSlices[i].leftTopMM[0]) / this.screenSlices[i].fovMM[0];
+        const fracY = (xyzMM[1] - this.screenSlices[i].leftTopMM[1]) / this.screenSlices[i].fovMM[1];
+        if (fracX >= 0 && fracX <= 1 && fracY >= 0 && fracY <= 1) {
+          const ltwh = this.screenSlices[i].leftTopWidthHeight.slice();
+          let isMirror = false;
+          if (ltwh[2] < 0) {
+            isMirror = true;
+            ltwh[0] += ltwh[2];
+            ltwh[2] = -ltwh[2];
+          }
+          let screenFracX = fracX;
+          if (isMirror) {
+            screenFracX = 1 - fracX;
+          }
+          const screenFracY = 1 - fracY;
+          const screenX = ltwh[0] + screenFracX * ltwh[2];
+          const screenY = ltwh[1] + screenFracY * ltwh[3];
+          return { pos: [screenX, screenY], tileIndex: i };
+        }
+      }
+    }
+    return null;
+  }
+  frac2canvasPos(frac) {
+    const worldMM = this.frac2mm(frac);
+    let bestMatch = { index: -1, distance: Infinity };
+    for (let i = 0; i < this.screenSlices.length; i++) {
+      const axCorSag = this.screenSlices[i].axCorSag;
+      if (axCorSag > 2 /* SAGITTAL */) {
+        continue;
+      }
+      if (this.screenSlices[i].AxyzMxy.length < 4) {
+        continue;
+      }
+      let xyzMM = vec3_exports.fromValues(worldMM[0], worldMM[1], worldMM[2]);
+      if (axCorSag === 1 /* CORONAL */) {
+        xyzMM = swizzleVec3(xyzMM, [0, 2, 1]);
+      }
+      if (axCorSag === 2 /* SAGITTAL */) {
+        xyzMM = swizzleVec3(xyzMM, [1, 2, 0]);
+      }
+      const v = this.screenSlices[i].AxyzMxy;
+      const expectedZ = v[2] + v[4] * (xyzMM[1] - v[1]) - v[3] * (xyzMM[0] - v[0]);
+      const distance4 = Math.abs(xyzMM[2] - expectedZ);
+      const tolerance = this.opts.sliceType === 3 /* MULTIPLANAR */ ? 1 : 0.1;
+      if (distance4 < bestMatch.distance) {
+        bestMatch = { index: i, distance: distance4 };
+      }
+      if (distance4 <= tolerance) {
+        const fracX = (xyzMM[0] - this.screenSlices[i].leftTopMM[0]) / this.screenSlices[i].fovMM[0];
+        const fracY = (xyzMM[1] - this.screenSlices[i].leftTopMM[1]) / this.screenSlices[i].fovMM[1];
+        if (fracX >= 0 && fracX <= 1 && fracY >= 0 && fracY <= 1) {
+          const ltwh = this.screenSlices[i].leftTopWidthHeight.slice();
+          let isMirror = false;
+          if (ltwh[2] < 0) {
+            isMirror = true;
+            ltwh[0] += ltwh[2];
+            ltwh[2] = -ltwh[2];
+          }
+          let screenFracX = fracX;
+          if (isMirror) {
+            screenFracX = 1 - fracX;
+          }
+          const screenFracY = 1 - fracY;
+          const screenX = ltwh[0] + screenFracX * ltwh[2];
+          const screenY = ltwh[1] + screenFracY * ltwh[3];
+          return [screenX, screenY];
+        }
+      }
+    }
+    if (bestMatch.index >= 0 && bestMatch.distance < 2) {
+      const i = bestMatch.index;
+      const axCorSag = this.screenSlices[i].axCorSag;
+      let xyzMM = vec3_exports.fromValues(worldMM[0], worldMM[1], worldMM[2]);
+      if (axCorSag === 1 /* CORONAL */) {
+        xyzMM = swizzleVec3(xyzMM, [0, 2, 1]);
+      }
+      if (axCorSag === 2 /* SAGITTAL */) {
+        xyzMM = swizzleVec3(xyzMM, [1, 2, 0]);
+      }
+      const v = this.screenSlices[i].AxyzMxy;
+      xyzMM[2] = v[2] + v[4] * (xyzMM[1] - v[1]) - v[3] * (xyzMM[0] - v[0]);
+      const fracX = (xyzMM[0] - this.screenSlices[i].leftTopMM[0]) / this.screenSlices[i].fovMM[0];
+      const fracY = (xyzMM[1] - this.screenSlices[i].leftTopMM[1]) / this.screenSlices[i].fovMM[1];
+      if (fracX >= -0.1 && fracX <= 1.1 && fracY >= -0.1 && fracY <= 1.1) {
+        const clampedFracX = Math.max(0, Math.min(1, fracX));
+        const clampedFracY = Math.max(0, Math.min(1, fracY));
+        const ltwh = this.screenSlices[i].leftTopWidthHeight.slice();
+        let isMirror = false;
+        if (ltwh[2] < 0) {
+          isMirror = true;
+          ltwh[0] += ltwh[2];
+          ltwh[2] = -ltwh[2];
+        }
+        let screenFracX = clampedFracX;
+        if (isMirror) {
+          screenFracX = 1 - clampedFracX;
+        }
+        const screenFracY = 1 - clampedFracY;
+        const screenX = ltwh[0] + screenFracX * ltwh[2];
+        const screenY = ltwh[1] + screenFracY * ltwh[3];
+        return [screenX, screenY];
+      }
+    }
+    return null;
+  }
+  /**
    * Calculates scaled slice dimensions and position within the canvas.
    * n.b. beware of similarly named `sliceScale` method.
    * @internal
@@ -45963,15 +47244,16 @@ var Niivue = class {
       throw new Error("bmpShader undefined");
     }
     this.bmpShader.use(this.gl);
-    this.gl.uniform2f(this.bmpShader.uniforms.canvasWidthHeight, this.gl.canvas.width, this.gl.canvas.height);
-    let h = this.gl.canvas.height;
-    let w = this.gl.canvas.height * this.bmpTextureWH;
-    if (w > this.gl.canvas.width) {
-      h = this.gl.canvas.width / this.bmpTextureWH;
-      w = this.gl.canvas.width;
+    const [regionX, regionY, regionW, regionH] = this.getBoundsRegion();
+    this.gl.uniform2f(this.bmpShader.uniforms.canvasWidthHeight, regionW, regionH);
+    let h = regionH;
+    let w = regionH * this.bmpTextureWH;
+    if (w > regionW) {
+      h = regionW / this.bmpTextureWH;
+      w = regionW;
     }
-    const left = (this.gl.canvas.width - w) / 2;
-    const top = (this.gl.canvas.height - h) / 2;
+    const left = regionX + (regionW - w) / 2;
+    const top = regionY + (regionH - h) / 2;
     this.gl.uniform4f(this.bmpShader.uniforms.leftTopWidthHeight, left, top, w, h);
     this.gl.bindVertexArray(this.genericVAO);
     this.gl.drawArrays(this.gl.TRIANGLE_STRIP, 0, 4);
@@ -46274,6 +47556,7 @@ var Niivue = class {
    */
   drawMosaic(mosaicStr) {
     this.screenSlices = [];
+    const [regionX, regionY, regionW, regionH] = this.getBoundsRegion();
     const fovRenderMM = this.screenFieldOfViewMM(0 /* AXIAL */, true);
     const fovSliceMM = this.screenFieldOfViewMM(0 /* AXIAL */);
     mosaicStr = mosaicStr.replaceAll(";", " ;").trim();
@@ -46292,7 +47575,6 @@ var Niivue = class {
     for (let pass = 0; pass < 2; pass++) {
       let isRender = false;
       let isCrossLines = false;
-      isRender = false;
       let rowHt = 0;
       let left = 0;
       let top = 0;
@@ -46314,8 +47596,7 @@ var Niivue = class {
         }
         if (item.includes("H")) {
           i++;
-          horizontalOverlap = Math.max(0, Math.min(1, parseFloat(items[i])));
-          horizontalOverlap = Math.abs(horizontalOverlap);
+          horizontalOverlap = Math.abs(Math.max(0, Math.min(1, parseFloat(items[i]))));
           continue;
         }
         if (item.includes("V")) {
@@ -46350,7 +47631,6 @@ var Niivue = class {
         if (horizontalOverlap > 0 && !isRender) {
           w = Math.round(w * (1 - horizontalOverlap));
         }
-        log.debug(`item ${i} width with overlap ${w} pixels`);
         left += w;
         w = 0;
         const sliceMM = parseFloat(item);
@@ -46385,7 +47665,12 @@ var Niivue = class {
             }
           }
         } else {
-          const ltwh = [marginLeft + scale6 * left, marginTop + scale6 * top, scale6 * w, scale6 * h];
+          const ltwh = [
+            regionX + marginLeft + scale6 * left,
+            regionY + marginTop + scale6 * top,
+            scale6 * w,
+            scale6 * h
+          ];
           this.fontPx = isLabel ? labelSize : 0;
           if (isRender) {
             let inf = sliceMM < 0 ? -Infinity : Infinity;
@@ -46411,12 +47696,12 @@ var Niivue = class {
       if (mxRowWid <= 0 || top <= 0) {
         break;
       }
-      const scaleW = (this.gl.canvas.width - 2 * this.opts.tileMargin - tileGap) / mxRowWid;
-      const scaleH = (this.effectiveCanvasHeight() - 2 * this.opts.tileMargin) / top;
+      const scaleW = (regionW - 2 * this.opts.tileMargin - tileGap) / mxRowWid;
+      const scaleH = (regionH - 2 * this.opts.tileMargin) / top;
       scale6 = Math.min(scaleW, scaleH);
       if (this.opts.centerMosaic) {
-        marginLeft = Math.floor(0.5 * (this.gl.canvas.width - mxRowWid * scale6));
-        marginTop = Math.floor(0.5 * (this.effectiveCanvasHeight() - top * scale6));
+        marginLeft = Math.floor(0.5 * (regionW - mxRowWid * scale6));
+        marginTop = Math.floor(0.5 * (regionH - top * scale6));
       } else {
         marginLeft = this.opts.tileMargin;
         marginTop = this.opts.tileMargin;
@@ -46459,6 +47744,153 @@ var Niivue = class {
     return [actualWidth, actualHeight];
   }
   /**
+   * Convert opts.bounds into CSS pixel coordinates (for hit testing).
+   * @returns [x, y, width, height] in CSS pixels
+   */
+  getBoundsRegionCSS() {
+    const rect = this.gl.canvas.getBoundingClientRect();
+    if (!this.opts.bounds) {
+      return [0, 0, rect.width, rect.height];
+    }
+    const [[x1, y1], [x2, y2]] = this.opts.bounds;
+    const regionX = Math.round(x1 * rect.width);
+    const regionW = Math.round((x2 - x1) * rect.width);
+    const yTop = Math.round(y1 * rect.height);
+    const yBot = Math.round(y2 * rect.height);
+    const regionH = yBot - yTop;
+    const regionY = rect.height - yBot;
+    return [regionX, regionY, regionW, regionH];
+  }
+  /**
+   * Returns true if a mouse/touch event happened inside this instance’s bounds.
+   */
+  eventInBounds(evt) {
+    const rect = this.gl.canvas.getBoundingClientRect();
+    let clientX;
+    let clientY;
+    if (evt instanceof MouseEvent) {
+      clientX = evt.clientX;
+      clientY = evt.clientY;
+    } else if (evt instanceof TouchEvent) {
+      const touch = evt.touches[0] ?? evt.changedTouches[0];
+      if (!touch) {
+        return false;
+      }
+      clientX = touch.clientX;
+      clientY = touch.clientY;
+    } else {
+      clientX = evt.clientX;
+      clientY = evt.clientY;
+    }
+    const cssX = clientX - rect.left;
+    const cssY = clientY - rect.top;
+    const [bx, by, bw, bh] = this.getBoundsRegionCSS();
+    return cssX >= bx && cssX <= bx + bw && cssY >= by && cssY <= by + bh;
+  }
+  /**
+   * Check whether the last known mouse cursor position is inside this instance's bounds.
+   *
+   * Used to filter keyboard events so they are only handled by the Niivue instance
+   * whose bounds currently contain the cursor.
+   *
+   * @returns true if the cursor is inside this.opts.bounds, false otherwise.
+   * @internal
+   */
+  cursorInBounds() {
+    if (this.mousePos[0] < 0 || this.mousePos[1] < 0) {
+      return false;
+    }
+    const [regionX, regionY, regionW, regionH] = this.getBoundsRegion();
+    const [mx, my] = this.mousePos;
+    return mx >= regionX && mx <= regionX + regionW && my >= regionY && my <= regionY + regionH;
+  }
+  /**
+   * Compute the current drawing region from opts.bounds.
+   * Returns [x, y, width, height] in device pixels, bottom-left origin.
+   */
+  getBoundsRegion() {
+    const gl = this.gl;
+    const dpr = this.uiData?.dpr || window.devicePixelRatio || 1;
+    const canvas = gl.canvas;
+    const cssW = canvas.clientWidth;
+    const cssH = canvas.clientHeight;
+    if (!this.opts.bounds) {
+      return [0, 0, gl.canvas.width, gl.canvas.height];
+    }
+    const [[x1, y1], [x2, y2]] = this.opts.bounds;
+    const regionX = Math.floor(x1 * cssW * dpr);
+    const regionW = Math.ceil((x2 - x1) * cssW * dpr);
+    let regionY = Math.floor((1 - y2) * cssH * dpr);
+    let regionH = Math.ceil((y2 - y1) * cssH * dpr);
+    if (regionY < 0) {
+      regionH += regionY;
+      regionY = 0;
+    }
+    if (regionY + regionH > gl.canvas.height) {
+      regionH = gl.canvas.height - regionY;
+    }
+    return [regionX, regionY, regionW, regionH];
+  }
+  /**
+   * Return true if the given canvas pixel coordinates are inside this Niivue instance's bounds.
+   */
+  inBounds(x, y) {
+    const [vpX, vpY, vpW, vpH] = this.getBoundsRegion();
+    const glX = x * this.uiData.dpr;
+    const glY = this.gl.canvas.height - y * this.uiData.dpr;
+    return glX >= vpX && glX <= vpX + vpW && glY >= vpY && glY <= vpY + vpH;
+  }
+  /**
+   * Rebind all textures for this instance.
+   * Call this at the start of every draw pass if multiple instances share a GL context.
+   */
+  bindTextures() {
+    this.gl.activeTexture(TEXTURE0_BACK_VOL);
+    this.gl.bindTexture(this.gl.TEXTURE_3D, this.volumeTexture);
+    this.gl.activeTexture(TEXTURE2_OVERLAY_VOL);
+    this.gl.bindTexture(this.gl.TEXTURE_3D, this.overlayTexture);
+    this.gl.activeTexture(TEXTURE8_PAQD);
+    this.gl.bindTexture(this.gl.TEXTURE_3D, this.paqdTexture);
+    this.gl.activeTexture(TEXTURE3_FONT);
+    this.gl.bindTexture(this.gl.TEXTURE_2D, this.fontTexture);
+    this.gl.activeTexture(TEXTURE1_COLORMAPS);
+    this.gl.bindTexture(this.gl.TEXTURE_2D, this.colormapTexture);
+    this.gl.activeTexture(TEXTURE5_MATCAP);
+    this.gl.bindTexture(this.gl.TEXTURE_2D, this.matCapTexture);
+    this.gl.activeTexture(TEXTURE6_GRADIENT);
+    this.gl.bindTexture(this.gl.TEXTURE_2D, this.gradientTexture);
+  }
+  /**
+   * Clear a rectangular region of this instance's canvas.
+   *
+   * @param mask - bitmask of buffers to clear (default: color+depth).
+   * @param ltwh - optional [x, y, w, h] region in *device px* (GL coords, bottom-left).
+   *   If not provided, clears the full instance bounds (getBoundsRegion).
+   *   For multiplanar panels, pass the panel’s own [x,y,w,h].
+   */
+  clearBounds(mask = this.gl.COLOR_BUFFER_BIT | this.gl.DEPTH_BUFFER_BIT, ltwh) {
+    const gl = this.gl;
+    const [vpX, vpY, vpW, vpH] = ltwh ?? this.getBoundsRegion();
+    const flippedY = gl.canvas.height - vpY - vpH;
+    if (mask & gl.DEPTH_BUFFER_BIT) {
+      gl.clearDepth(1);
+    }
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(vpX, flippedY, vpW, vpH);
+    if (mask & gl.COLOR_BUFFER_BIT) {
+      gl.clearColor(this.opts.backColor[0], this.opts.backColor[1], this.opts.backColor[2], this.opts.backColor[3]);
+    }
+    gl.clear(mask);
+    gl.disable(gl.SCISSOR_TEST);
+  }
+  drawBoundsBorder() {
+    if (!this.opts.showBoundsBorder) {
+      return;
+    }
+    const [x, y, w, h] = this.getBoundsRegion();
+    this.drawBoundsBox([x, y, w, h], this.opts.boundsBorderColor, this.opts.selectionBoxLineThickness);
+  }
+  /**
    * Core function to draw the entire scene including volumes, meshes, slices, overlays, colorbars, graphs, and handle user interaction like dragging.
    * @internal
    */
@@ -46467,8 +47899,10 @@ var Niivue = class {
       return;
     }
     this.colorbarHeight = 0;
-    this.gl.clearColor(this.opts.backColor[0], this.opts.backColor[1], this.opts.backColor[2], this.opts.backColor[3]);
-    this.gl.clear(this.gl.COLOR_BUFFER_BIT | this.gl.DEPTH_BUFFER_BIT);
+    const [vpX, vpY, vpW, vpH] = this.getBoundsRegion();
+    this.gl.viewport(vpX, vpY, vpW, vpH);
+    this.clearBounds(this.gl.COLOR_BUFFER_BIT | this.gl.DEPTH_BUFFER_BIT);
+    this.bindTextures();
     if (this.bmpTexture && this.thumbnailVisible) {
       this.drawThumbnail();
       return;
@@ -46487,7 +47921,7 @@ var Niivue = class {
           return;
         }
         this.screenSlices = [];
-        this.draw3D();
+        this.draw3D([vpX, vpY, vpW, vpH]);
         if (this.opts.isColorbar) {
           this.drawColorbar();
         }
@@ -46529,35 +47963,29 @@ var Niivue = class {
     } else {
       const heroImageWH = [0, 0];
       let isHeroImage = false;
-      this.gl.viewport(0, 0, this.gl.canvas.width, this.gl.canvas.height);
       this.screenSlices = [];
       if (this.customLayout && this.customLayout.length > 0) {
         this.screenSlices = [];
-        this.gl.viewport(0, 0, this.gl.canvas.width, this.gl.canvas.height);
         const { volScale } = this.sliceScale();
-        const canvasWH = [this.effectiveCanvasWidth(), this.effectiveCanvasHeight()];
         for (const view of this.customLayout) {
           const { sliceType, position, sliceMM } = view;
-          const leftTopWidthHeight = position.slice();
-          if (position[0] >= 0 && position[0] <= 1 && position[2] <= 1) {
-            leftTopWidthHeight[0] = position[0] * canvasWH[0];
-            leftTopWidthHeight[2] = position[2] * canvasWH[0];
-          }
-          if (position[1] >= 0 && position[1] <= 1 && position[3] <= 1) {
-            leftTopWidthHeight[1] = position[1] * canvasWH[1];
-            leftTopWidthHeight[3] = position[3] * canvasWH[1];
-          }
-          if (leftTopWidthHeight[0] + leftTopWidthHeight[2] > canvasWH[0]) {
+          const leftTopWidthHeight = [
+            vpX + position[0] * vpW,
+            vpY + position[1] * vpH,
+            position[2] * vpW,
+            position[3] * vpH
+          ];
+          if (leftTopWidthHeight[0] + leftTopWidthHeight[2] > vpX + vpW) {
             log.warn("adjusting slice width because it would have been clipped");
-            leftTopWidthHeight[2] = canvasWH[0] - leftTopWidthHeight[0];
+            leftTopWidthHeight[2] = vpX + vpW - leftTopWidthHeight[0];
           }
-          if (leftTopWidthHeight[1] + leftTopWidthHeight[3] > canvasWH[1]) {
+          if (leftTopWidthHeight[1] + leftTopWidthHeight[3] > vpY + vpH) {
             log.warn("adjusting slice height because it would have been clipped");
-            leftTopWidthHeight[3] = canvasWH[1] - leftTopWidthHeight[1];
+            leftTopWidthHeight[3] = vpY + vpH - leftTopWidthHeight[1];
           }
           if (sliceType === 4 /* RENDER */) {
             this.draw3D(leftTopWidthHeight);
-          } else if (sliceType === 0 /* AXIAL */ || sliceType === 1 /* CORONAL */ || sliceType === 2 /* SAGITTAL */) {
+          } else {
             const actualDimensions = this.calculateWidthHeight(
               sliceType,
               volScale,
@@ -46567,12 +47995,16 @@ var Niivue = class {
             this.draw2D(leftTopWidthHeight, sliceType, sliceMM ?? NaN, actualDimensions);
           }
         }
-      } else if (this.opts.sliceType === 0 /* AXIAL */) {
-        this.draw2D([0, 0, 0, 0], 0);
-      } else if (this.opts.sliceType === 1 /* CORONAL */) {
-        this.draw2D([0, 0, 0, 0], 1);
-      } else if (this.opts.sliceType === 2 /* SAGITTAL */) {
-        this.draw2D([0, 0, 0, 0], 2);
+      } else if (this.opts.sliceType === 0 /* AXIAL */ || this.opts.sliceType === 1 /* CORONAL */ || this.opts.sliceType === 2 /* SAGITTAL */) {
+        const { volScale } = this.sliceScale();
+        const leftTopWidthHeight = [vpX, vpY, vpW, vpH];
+        const actualDimensions = this.calculateWidthHeight(
+          this.opts.sliceType,
+          volScale,
+          leftTopWidthHeight[2],
+          leftTopWidthHeight[3]
+        );
+        this.draw2D([0, 0, 0, 0], this.opts.sliceType, NaN, actualDimensions);
       } else {
         let padPixelsWH = function(cols, rows) {
           return [(cols - 1) * pad + cols * innerPad, (rows - 1) * pad + rows * innerPad];
@@ -46607,6 +48039,7 @@ var Niivue = class {
         if (innerPad < 0) {
           innerPad = 2 * (2 + Math.ceil(this.fontPx));
         }
+        const [regionX, regionY, regionW, regionH] = this.getBoundsRegion();
         let canvasWH = [this.effectiveCanvasWidth(), this.effectiveCanvasHeight()];
         if (this.opts.heroImageFraction > 0 && this.opts.heroImageFraction < 1) {
           isShowRender = false;
@@ -46675,17 +48108,16 @@ var Niivue = class {
           }
         }
         if (isHeroImage) {
-          const heroW = heroImageWH[0] === 0 ? this.effectiveCanvasWidth() : heroImageWH[0];
-          const heroH = heroImageWH[1] === 0 ? this.effectiveCanvasHeight() : heroImageWH[1];
+          const heroW = heroImageWH[0] === 0 ? regionW : heroImageWH[0];
+          const heroH = heroImageWH[1] === 0 ? regionH : heroImageWH[1];
           if (this.opts?.heroSliceType === 0 /* AXIAL */ || this.opts?.heroSliceType === 1 /* CORONAL */ || this.opts?.heroSliceType === 2 /* SAGITTAL */) {
-            this.draw2D([0, 0, heroW, heroH], this.opts.heroSliceType, NaN, [Infinity, Infinity]);
+            this.draw2D([regionX, regionY, heroW, heroH], this.opts.heroSliceType, NaN, [Infinity, Infinity]);
           } else {
             const ltwh2 = ltwh.slice();
-            const canvasW = this.effectiveCanvasWidth();
-            if (heroW === canvasW) {
+            if (heroW === regionW) {
               ltwh2[0] = 0;
             }
-            this.draw3D([ltwh2[0], 0, heroW, heroH]);
+            this.draw3D([regionX + ltwh2[0], regionY, heroW, heroH]);
           }
           ltwh[0] += heroImageWH[0];
           ltwh[1] += heroImageWH[1];
@@ -46698,20 +48130,32 @@ var Niivue = class {
         const actualY = actualScale[1] * ltwh[4];
         const actualZ = actualScale[2] * ltwh[4];
         if (isDrawColumn) {
-          this.draw2D([ltwh[0], ltwh[1], sX, sY], 0, NaN, [actualX, actualY]);
-          this.draw2D([ltwh[0], ltwh[1] + sY + pad, sX, sZ], 1, NaN, [actualX, actualZ]);
-          this.draw2D([ltwh[0], ltwh[1] + sY + pad + sZ + pad, sY, sZ], 2, NaN, [actualY, actualZ]);
+          this.draw2D([regionX + ltwh[0], regionY + ltwh[1], sX, sY], 0 /* AXIAL */, NaN, [actualX, actualY]);
+          this.draw2D([regionX + ltwh[0], regionY + ltwh[1] + sY + pad, sX, sZ], 1 /* CORONAL */, NaN, [
+            actualX,
+            actualZ
+          ]);
+          this.draw2D([regionX + ltwh[0], regionY + ltwh[1] + sY + pad + sZ + pad, sY, sZ], 2 /* SAGITTAL */, NaN, [
+            actualY,
+            actualZ
+          ]);
           if (isDraw3D) {
             const sMx = mx * ltwh[4];
-            this.draw3D([ltwh[0], ltwh[1] + sY + sZ + sZ + pad * 3, sMx, sMx]);
+            this.draw3D([regionX + ltwh[0], regionY + ltwh[1] + sY + sZ + sZ + pad * 3, sMx, sMx]);
           }
         } else if (isDrawRow) {
-          this.draw2D([ltwh[0], ltwh[1], sX, sY], 0, NaN, [actualX, actualY]);
-          this.draw2D([ltwh[0] + sX + pad, ltwh[1], sX, sZ], 1, NaN, [actualX, actualZ]);
-          this.draw2D([ltwh[0] + sX + sX + pad * 2, ltwh[1], sY, sZ], 2, NaN, [actualY, actualZ]);
+          this.draw2D([regionX + ltwh[0], regionY + ltwh[1], sX, sY], 0 /* AXIAL */, NaN, [actualX, actualY]);
+          this.draw2D([regionX + ltwh[0] + sX + pad, regionY + ltwh[1], sX, sZ], 1 /* CORONAL */, NaN, [
+            actualX,
+            actualZ
+          ]);
+          this.draw2D([regionX + ltwh[0] + sX + sX + pad * 2, regionY + ltwh[1], sY, sZ], 2 /* SAGITTAL */, NaN, [
+            actualY,
+            actualZ
+          ]);
           if (isDraw3D) {
             const sMx = mx * ltwh[4];
-            this.draw3D([ltwh[0] + sX + sX + sY + pad * 3, ltwh[1], sMx, sMx]);
+            this.draw3D([regionX + ltwh[0] + sX + sX + sY + pad * 3, regionY + ltwh[1], sMx, sMx]);
           }
         } else if (isDrawGrid) {
           if (!isShowRender) {
@@ -46723,11 +48167,17 @@ var Niivue = class {
           if (isHeroImage) {
             isDraw3D = false;
           }
-          this.draw2D([ltwh[0], ltwh[1] + sZ + pad, sX, sY], 0, NaN, [actualX, actualY]);
-          this.draw2D([ltwh[0], ltwh[1], sX, sZ], 1, NaN, [actualX, actualZ]);
-          this.draw2D([ltwh[0] + sX + pad, ltwh[1], sY, sZ], 2, NaN, [actualY, actualZ]);
+          this.draw2D([regionX + ltwh[0], regionY + ltwh[1] + sZ + pad, sX, sY], 0 /* AXIAL */, NaN, [
+            actualX,
+            actualY
+          ]);
+          this.draw2D([regionX + ltwh[0], regionY + ltwh[1], sX, sZ], 1 /* CORONAL */, NaN, [actualX, actualZ]);
+          this.draw2D([regionX + ltwh[0] + sX + pad, regionY + ltwh[1], sY, sZ], 2 /* SAGITTAL */, NaN, [
+            actualY,
+            actualZ
+          ]);
           if (isDraw3D) {
-            this.draw3D([ltwh[0] + sX + pad, ltwh[1] + sZ + pad, sY, sY]);
+            this.draw3D([regionX + ltwh[0] + sX + pad, regionY + ltwh[1] + sZ + pad, sY, sY]);
           }
         }
       }
@@ -46751,7 +48201,7 @@ var Niivue = class {
         ]);
         return;
       }
-      if (this.opts.dragMode === 4 /* slicer3D */) {
+      if (this.getCurrentDragMode() === 4 /* slicer3D */) {
         this.dragForSlicer3D([
           this.uiData.dragStart[0],
           this.uiData.dragStart[1],
@@ -46760,7 +48210,7 @@ var Niivue = class {
         ]);
         return;
       }
-      if (this.opts.dragMode === 3 /* pan */) {
+      if (this.getCurrentDragMode() === 3 /* pan */) {
         this.dragForPanZoom([
           this.uiData.dragStart[0],
           this.uiData.dragStart[1],
@@ -46772,34 +48222,103 @@ var Niivue = class {
       if (this.inRenderTile(this.uiData.dragStart[0], this.uiData.dragStart[1]) >= 0) {
         return;
       }
-      if (this.opts.dragMode === 2 /* measurement */) {
+      if (this.getCurrentDragMode() === 2 /* measurement */) {
         this.drawMeasurementTool([
           this.uiData.dragStart[0],
           this.uiData.dragStart[1],
           this.uiData.dragEnd[0],
           this.uiData.dragEnd[1]
         ]);
-        return;
       }
-      if (this.opts.dragMode === 7 /* angle */) {
+      if (this.getCurrentDragMode() === 7 /* angle */) {
         this.drawAngleMeasurementTool();
-        return;
       }
-      const width = Math.abs(this.uiData.dragStart[0] - this.uiData.dragEnd[0]);
-      const height = Math.abs(this.uiData.dragStart[1] - this.uiData.dragEnd[1]);
-      this.drawSelectionBox([
-        Math.min(this.uiData.dragStart[0], this.uiData.dragEnd[0]),
-        Math.min(this.uiData.dragStart[1], this.uiData.dragEnd[1]),
-        width,
-        height
-      ]);
-      return;
+      const currentDragMode = this.getCurrentDragMode();
+      if (currentDragMode === 1 /* contrast */ || currentDragMode === 6 /* roiSelection */) {
+        const width = Math.abs(this.uiData.dragStart[0] - this.uiData.dragEnd[0]);
+        const height = Math.abs(this.uiData.dragStart[1] - this.uiData.dragEnd[1]);
+        this.drawSelectionBox([
+          Math.min(this.uiData.dragStart[0], this.uiData.dragEnd[0]),
+          Math.min(this.uiData.dragStart[1], this.uiData.dragEnd[1]),
+          width,
+          height
+        ]);
+      }
+    }
+    for (const measurement of this.document.completedMeasurements) {
+      if (this.shouldDrawOnCurrentSlice(measurement.sliceIndex, measurement.sliceType, measurement.slicePosition)) {
+        const startFrac = this.mm2frac(measurement.startMM);
+        const endFrac = this.mm2frac(measurement.endMM);
+        const startCanvasResult = this.frac2canvasPosWithTile(startFrac, measurement.sliceType);
+        const endCanvasResult = this.frac2canvasPosWithTile(endFrac, measurement.sliceType);
+        if (startCanvasResult && endCanvasResult && startCanvasResult.tileIndex === endCanvasResult.tileIndex) {
+          this.drawMeasurementTool([
+            startCanvasResult.pos[0],
+            startCanvasResult.pos[1],
+            endCanvasResult.pos[0],
+            endCanvasResult.pos[1]
+          ]);
+        }
+      }
+    }
+    for (let i = 0; i < this.document.completedAngles.length; i++) {
+      const angle3 = this.document.completedAngles[i];
+      const shouldDraw = this.shouldDrawOnCurrentSlice(angle3.sliceIndex, angle3.sliceType, angle3.slicePosition);
+      if (shouldDraw) {
+        const firstLineStartFrac = this.mm2frac(angle3.firstLineMM.start);
+        const firstLineEndFrac = this.mm2frac(angle3.firstLineMM.end);
+        const secondLineStartFrac = this.mm2frac(angle3.secondLineMM.start);
+        const secondLineEndFrac = this.mm2frac(angle3.secondLineMM.end);
+        const firstLineStartCanvasResult = this.frac2canvasPosWithTile(firstLineStartFrac, angle3.sliceType);
+        const firstLineEndCanvasResult = this.frac2canvasPosWithTile(firstLineEndFrac, angle3.sliceType);
+        const secondLineStartCanvasResult = this.frac2canvasPosWithTile(secondLineStartFrac, angle3.sliceType);
+        const secondLineEndCanvasResult = this.frac2canvasPosWithTile(secondLineEndFrac, angle3.sliceType);
+        if (firstLineStartCanvasResult && firstLineEndCanvasResult && secondLineStartCanvasResult && secondLineEndCanvasResult && firstLineStartCanvasResult.tileIndex === firstLineEndCanvasResult.tileIndex && firstLineStartCanvasResult.tileIndex === secondLineStartCanvasResult.tileIndex && firstLineStartCanvasResult.tileIndex === secondLineEndCanvasResult.tileIndex) {
+          this.drawMeasurementTool(
+            [
+              firstLineStartCanvasResult.pos[0],
+              firstLineStartCanvasResult.pos[1],
+              firstLineEndCanvasResult.pos[0],
+              firstLineEndCanvasResult.pos[1]
+            ],
+            false
+          );
+          this.drawMeasurementTool(
+            [
+              secondLineStartCanvasResult.pos[0],
+              secondLineStartCanvasResult.pos[1],
+              secondLineEndCanvasResult.pos[0],
+              secondLineEndCanvasResult.pos[1]
+            ],
+            false
+          );
+          const angleForText = {
+            firstLine: [
+              firstLineStartCanvasResult.pos[0],
+              firstLineStartCanvasResult.pos[1],
+              firstLineEndCanvasResult.pos[0],
+              firstLineEndCanvasResult.pos[1]
+            ],
+            secondLine: [
+              secondLineStartCanvasResult.pos[0],
+              secondLineStartCanvasResult.pos[1],
+              secondLineEndCanvasResult.pos[0],
+              secondLineEndCanvasResult.pos[1]
+            ],
+            sliceIndex: angle3.sliceIndex,
+            sliceType: angle3.sliceType,
+            slicePosition: angle3.slicePosition
+          };
+          this.drawAngleTextForAngle(angleForText);
+        }
+      }
     }
     const pos = this.frac2mm([this.scene.crosshairPos[0], this.scene.crosshairPos[1], this.scene.crosshairPos[2]]);
     posString = pos[0].toFixed(2) + "\xD7" + pos[1].toFixed(2) + "\xD7" + pos[2].toFixed(2);
     this.readyForSync = true;
     this.sync();
     this.drawAnchoredLabels();
+    this.drawBoundsBorder();
     return posString;
   }
   /**
@@ -46839,13 +48358,48 @@ var Niivue = class {
   set gl(gl) {
     this._gl = gl;
   }
+  /**
+   * Find the first and last slices containing drawing data along a given axis
+   * @param sliceType - The slice orientation (AXIAL, CORONAL, or SAGITTAL)
+   * @returns Object containing first and last slice indices, or null if no data found
+   */
+  findDrawingBoundarySlices(sliceType) {
+    if (!this.back || !this.back.dims || !this.drawBitmap) {
+      return null;
+    }
+    const dims = { dimX: this.back.dims[1], dimY: this.back.dims[2], dimZ: this.back.dims[3] };
+    return findBoundarySlices(sliceType, this.drawBitmap, dims);
+  }
+  /**
+   * Interpolate between mask slices using geometric or intensity-guided methods
+   * @param sliceIndexLow - Lower slice index (optional, will auto-detect if not provided)
+   * @param sliceIndexHigh - Higher slice index (optional, will auto-detect if not provided)
+   * @param options - Interpolation options
+   */
+  interpolateMaskSlices(sliceIndexLow, sliceIndexHigh, options = {}) {
+    if (!this.back || !this.back.dims || !this.drawBitmap) {
+      throw new Error("Background image and drawing bitmap must be loaded");
+    }
+    const dims = { dimX: this.back.dims[1], dimY: this.back.dims[2], dimZ: this.back.dims[3] };
+    const imageData = this.back.img;
+    const maxVal = this.back.global_max;
+    interpolateMaskSlices(
+      this.drawBitmap,
+      dims,
+      imageData,
+      maxVal,
+      sliceIndexLow,
+      sliceIndexHigh,
+      options,
+      () => this.refreshDrawing(true)
+    );
+  }
 };
+_eventsController = new WeakMap();
 export {
   COLORMAP_TYPE,
   DEFAULT_OPTIONS,
   DRAG_MODE,
-  DRAG_MODE_PRIMARY,
-  DRAG_MODE_SECONDARY,
   INITIAL_SCENE_DATA,
   LabelAnchorPoint,
   LabelLineTerminator,
@@ -46863,6 +48417,7 @@ export {
   NVMeshUtilities,
   NVUtilities,
   Niivue,
+  PEN_TYPE,
   SHOW_RENDER,
   SLICE_TYPE,
   cmapper,

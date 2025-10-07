@@ -37,14 +37,6 @@ declare class ColorTables {
 }
 declare const cmapper: ColorTables;
 
-declare class Shader {
-    program: WebGLProgram;
-    uniforms: Record<string, WebGLUniformLocation | null>;
-    isMatcap?: boolean;
-    constructor(gl: WebGL2RenderingContext, vertexSrc: string, fragmentSrc: string);
-    use(gl: WebGL2RenderingContext): void;
-}
-
 type Geometry = {
     vertexBuffer: WebGLBuffer;
     indexBuffer: WebGLBuffer;
@@ -506,6 +498,11 @@ declare class NVImage {
      */
     getValue(x: number, y: number, z: number, frame4D?: number, isReadImaginary?: boolean): number;
     /**
+     * Returns voxel intensities at specific native coordinates.
+     * Delegates to VolumeUtils.getValue.
+     */
+    getValues(x: number, y: number, z: number, frame4D?: number, isReadImaginary?: boolean): number[];
+    /**
      * Update options for image
      */
     applyOptionsUpdate(options: ImageFromUrlOptions): void;
@@ -562,6 +559,34 @@ declare class NVConnectome extends NVMesh {
 }
 
 /**
+ * Represents a completed measurement between two points
+ */
+interface CompletedMeasurement {
+    startMM: vec3;
+    endMM: vec3;
+    distance: number;
+    sliceIndex: number;
+    sliceType: SLICE_TYPE;
+    slicePosition: number;
+}
+/**
+ * Represents a completed angle measurement between two lines
+ */
+interface CompletedAngle {
+    firstLineMM: {
+        start: vec3;
+        end: vec3;
+    };
+    secondLineMM: {
+        start: vec3;
+        end: vec3;
+    };
+    angle: number;
+    sliceIndex: number;
+    sliceType: SLICE_TYPE;
+    slicePosition: number;
+}
+/**
  * Slice Type
  * @ignore
  */
@@ -571,6 +596,11 @@ declare enum SLICE_TYPE {
     SAGITTAL = 2,
     MULTIPLANAR = 3,
     RENDER = 4
+}
+declare enum PEN_TYPE {
+    PEN = 0,
+    RECTANGLE = 1,
+    ELLIPSE = 2
 }
 declare enum SHOW_RENDER {
     NEVER = 0,
@@ -599,21 +629,22 @@ declare enum DRAG_MODE {
     slicer3D = 4,
     callbackOnly = 5,
     roiSelection = 6,
-    angle = 7
+    angle = 7,
+    crosshair = 8,
+    windowing = 9
 }
-declare enum DRAG_MODE_SECONDARY {
-    none = 0,
-    contrast = 1,
-    measurement = 2,
-    pan = 3,
-    slicer3D = 4,
-    callbackOnly = 5,
-    roiSelection = 6,
-    angle = 7
+interface MouseEventConfig {
+    leftButton: {
+        primary: DRAG_MODE;
+        withShift?: DRAG_MODE;
+        withCtrl?: DRAG_MODE;
+    };
+    rightButton: DRAG_MODE;
+    centerButton: DRAG_MODE;
 }
-declare enum DRAG_MODE_PRIMARY {
-    crosshair = 0,
-    windowing = 1
+interface TouchEventConfig {
+    singleTouch: DRAG_MODE;
+    doubleTouch: DRAG_MODE;
 }
 declare enum COLORMAP_TYPE {
     MIN_TO_MAX = 0,
@@ -640,6 +671,7 @@ type NVConfigOptions = {
     fontColor: Float32List;
     selectionBoxColor: number[];
     clipPlaneColor: number[];
+    paqdUniforms: number[];
     clipThick: number;
     clipVolumeLow: number[];
     clipVolumeHigh: number[];
@@ -664,12 +696,15 @@ type NVConfigOptions = {
     multiplanarShowRender: SHOW_RENDER;
     isRadiologicalConvention: boolean;
     meshThicknessOn2D: number | string;
-    dragMode: DRAG_MODE | DRAG_MODE_SECONDARY;
-    dragModePrimary: DRAG_MODE_PRIMARY;
+    dragMode: DRAG_MODE;
+    dragModePrimary: DRAG_MODE;
+    mouseEventConfig?: MouseEventConfig;
+    touchEventConfig?: TouchEventConfig;
     yoke3Dto2DZoom: boolean;
     isDepthPickMesh: boolean;
     isCornerOrientationText: boolean;
     isOrientationTextVisible: boolean;
+    showAllOrientationMarkers: boolean;
     heroImageFraction: number;
     heroSliceType: SLICE_TYPE;
     sagittalNoseLeft: boolean;
@@ -682,6 +717,7 @@ type NVConfigOptions = {
     dragAndDropEnabled: boolean;
     drawingEnabled: boolean;
     penValue: number;
+    penType: PEN_TYPE;
     floodFillNeighbors: number;
     isFilledPen: boolean;
     thumbnail: string;
@@ -725,6 +761,9 @@ type NVConfigOptions = {
     gradientAmount: number;
     invertScrollDirection: boolean;
     is2DSliceShader: boolean;
+    bounds: [[number, number], [number, number]] | null;
+    showBoundsBorder?: boolean;
+    boundsBorderColor?: number[];
 };
 declare const DEFAULT_OPTIONS: NVConfigOptions;
 type SceneData = {
@@ -781,6 +820,8 @@ type DocumentData = {
     sceneData?: Partial<SceneData>;
     connectomes?: string[];
     customData?: string;
+    completedMeasurements?: CompletedMeasurement[];
+    completedAngles?: CompletedAngle[];
 };
 type ExportDocumentData = {
     encodedImageBlobs: string[];
@@ -794,6 +835,8 @@ type ExportDocumentData = {
     labels: NVLabel3D[];
     connectomes: string[];
     customData: string;
+    completedMeasurements: CompletedMeasurement[];
+    completedAngles: CompletedAngle[];
 };
 /**
  * Creates and instance of NVDocument
@@ -808,6 +851,8 @@ declare class NVDocument {
     drawBitmap: Uint8Array | null;
     imageOptionsMap: Map<any, any>;
     meshOptionsMap: Map<any, any>;
+    completedMeasurements: CompletedMeasurement[];
+    completedAngles: CompletedAngle[];
     private _optsProxy;
     private _optsChangeCallback;
     constructor();
@@ -888,8 +933,9 @@ declare class NVDocument {
      *
      * @param embedImages  If false, encodedImageBlobs is left empty
      *                     (imageOptionsArray still records the URL / name).
+     * @param embedDrawing  If false, encodedDrawingBlob is left empty
      */
-    json(embedImages?: boolean): ExportDocumentData;
+    json(embedImages?: boolean, embedDrawing?: boolean): ExportDocumentData;
     download(fileName: string, compress: boolean, opts?: {
         embedImages: boolean;
     }): Promise<void>;
@@ -1356,6 +1402,14 @@ declare class NVMesh {
     loadFromBase64({ base64, gl, name, opacity, rgba255, visible, layers }?: Partial<LoadFromBase64Params>): Promise<NVMesh>;
 }
 
+declare class Shader {
+    program: WebGLProgram;
+    uniforms: Record<string, WebGLUniformLocation | null>;
+    isMatcap?: boolean;
+    constructor(gl: WebGL2RenderingContext, vertexSrc: string, fragmentSrc: string);
+    use(gl: WebGL2RenderingContext): void;
+}
+
 type TypedNumberArray = Float64Array | Float32Array | Uint32Array | Uint16Array | Uint8Array | Int32Array | Int16Array | Int8Array;
 declare class NVUtilities {
     static arrayBufferToBase64(arrayBuffer: ArrayBuffer): string;
@@ -1571,6 +1625,8 @@ type UIData = {
     max3D?: number;
     windowX: number;
     windowY: number;
+    activeDragMode: DRAG_MODE | null;
+    activeDragButton: number | null;
     angleFirstLine: number[];
     angleState: 'none' | 'drawing_first_line' | 'drawing_second_line' | 'complete';
 };
@@ -1595,6 +1651,7 @@ type DicomLoader = {
  * let niivue = new Niivue({crosshairColor: [0,1,0,0.5], textHeight: 0.5}) // a see-through green crosshair, and larger text labels
  */
 declare class Niivue {
+    #private;
     loaders: {};
     dicomLoader: DicomLoader | null;
     canvas: HTMLCanvasElement | null;
@@ -1609,9 +1666,11 @@ declare class Niivue {
     useCustomGradientTexture: boolean;
     renderGradientValues: boolean;
     drawTexture: WebGLTexture | null;
+    paqdTexture: WebGLTexture | null;
     drawUndoBitmaps: Uint8Array[];
     drawLut: LUT;
     drawOpacity: number;
+    drawRimOpacity: number;
     clickToSegmentIsGrowing: boolean;
     clickToSegmentGrowingBitmap: Uint8Array | null;
     clickToSegmentXY: number[];
@@ -1621,6 +1680,8 @@ declare class Niivue {
     drawPenAxCorSag: number;
     drawFillOverwrites: boolean;
     drawPenFillPts: number[][];
+    drawShapeStartLocation: number[];
+    drawShapePreviewBitmap: Uint8Array | null;
     overlayTexture: WebGLTexture | null;
     overlayTextureID: WebGLTexture | null;
     sliceMMShader?: Shader;
@@ -1658,7 +1719,7 @@ declare class Niivue {
     orientShaderI: Shader | null;
     orientShaderF: Shader | null;
     orientShaderRGBU: Shader | null;
-    orientShaderSPARQ: Shader | null;
+    orientShaderPAQD: Shader | null;
     surfaceShader: Shader | null;
     blurShader: Shader | null;
     sobelBlurShader: Shader | null;
@@ -2115,20 +2176,38 @@ declare class Niivue {
      */
     mouseDownListener(e: MouseEvent): void;
     /**
-     * Handles left mouse button actions for crosshair or windowing mode.
+     * Gets the appropriate drag mode for a mouse button based on configuration.
      * @internal
      */
-    mouseLeftButtonHandler(e: MouseEvent): void;
+    getMouseButtonDragMode(button: number, shiftKey: boolean, ctrlKey: boolean): DRAG_MODE;
     /**
-     * Handles center mouse button drag to initiate 2D panning or clip plane adjustment.
+     * Gets the appropriate drag mode for touch events based on configuration.
      * @internal
      */
-    mouseCenterButtonHandler(e: MouseEvent): void;
+    getTouchDragMode(isDoubleTouch: boolean): DRAG_MODE;
     /**
-     * Handles right mouse button drag to enable 2D panning or clip plane control.
+     * Sets the active drag mode for the current interaction.
      * @internal
      */
-    mouseRightButtonHandler(e: MouseEvent): void;
+    setActiveDragMode(button: number, shiftKey: boolean, ctrlKey: boolean): void;
+    /**
+     * Gets the currently active drag mode, or falls back to configured defaults.
+     * @internal
+     */
+    getCurrentDragMode(): DRAG_MODE;
+    /**
+     * Clears the active drag mode.
+     * @internal
+     */
+    clearActiveDragMode(): void;
+    /**
+     * Unified handler for mouse actions based on drag mode.
+     * @internal
+     */
+    handleMouseAction(dragMode: DRAG_MODE, e: MouseEvent, pos: {
+        x: number;
+        y: number;
+    }): void;
     /**
      * calculate the the min and max voxel indices from an array of two values (used in selecting intensities with the selection box)
      * @internal
@@ -2365,6 +2444,12 @@ declare class Niivue {
      */
     setIsOrientationTextVisible(isOrientationTextVisible: boolean): void;
     /**
+     * Show or hide all four orientation labels (e.g., L/R, A/P, S/I) in 2D slice views
+     * @param showAllOrientationMarkers - whether all four orientation markers should be displayed
+     * @example niivue.setShowAllOrientationMarkers(true)
+     */
+    setShowAllOrientationMarkers(showAllOrientationMarkers: boolean): void;
+    /**
      * determine proportion of screen real estate devoted to rendering in multiplanar view.
      * @param fraction - proportion of screen devoted to primary (hero) image (0 to disable)
      * @example niivue.setHeroImage(0.5)
@@ -2520,7 +2605,7 @@ declare class Niivue {
      * Uses a circular buffer to limit undo memory usage.
      * @internal
      */
-    drawAddUndoBitmap(): void;
+    drawAddUndoBitmap(drawFillOverwrites?: boolean): void;
     /**
      * Clears all stored drawing undo bitmaps and resets the undo index.
      * @internal
@@ -2754,7 +2839,12 @@ declare class Niivue {
      */
     mouseDown(x: number, y: number): void;
     /**
-     * Updates mouse position and modifies 3D render view if the pointer is in the render tile.
+     * Updates mouse position
+     * @internal
+     */
+    updateMousePos(x: number, y: number): [number, number];
+    /**
+     *  and modifies 3D render view if the pointer is in the render tile.
      *
      * @internal
      */
@@ -2828,6 +2918,16 @@ declare class Niivue {
      * @see {@link https://niivue.com/demos/features/colormaps.html | live demo usage}
      */
     setSelectionBoxColor(color: number[]): void;
+    /**
+     * Update the drawing bounds for this Niivue instance.
+     *
+     * @param bounds - [x1, y1, x2, y2] in normalized (0–1) coordinates.
+     *
+     * Example:
+     *   nv.setBounds([0,0,0.5,0.5])   // top-left quarter
+     *   nv.setBounds([0.5,0.5,1,1])   // bottom-right quarter
+     */
+    setBounds(bounds: [number, number, number, number]): void;
     /**
      * Handles mouse wheel or trackpad scroll to change slices, zoom, or frame depending on context.
      * @internal
@@ -3100,6 +3200,16 @@ declare class Niivue {
      */
     drawPenLine(ptA: number[], ptB: number[], penValue: number): void;
     /**
+     * Draw a rectangle from point A to point B
+     * @internal
+     */
+    drawRectangleMask(ptA: number[], ptB: number[], penValue: number): void;
+    /**
+     * Draw an ellipse from point A to point B (treating them as opposite corners of bounding box)
+     * @internal
+     */
+    drawEllipseMask(ptA: number[], ptB: number[], penValue: number): void;
+    /**
      * Performs a 1-voxel binary dilation on a connected cluster within the drawing mask using the drawFloodFillCore function.
      *
      * @param seedXYZ -  voxel index of the seed voxel in the mask array.
@@ -3124,6 +3234,13 @@ declare class Niivue {
      */
     drawFloodFill(seedXYZ: number[], newColor?: number, growSelectedCluster?: number, forceMin?: number, forceMax?: number, neighbors?: number, maxDistanceMM?: number, is2D?: boolean, targetBitmap?: Uint8Array | null, isGrowClusterTool?: boolean): void;
     /**
+     * Fills exterior regions of a 2D bitmap, marking outside voxels with 2
+     * while leaving interior voxels at 0 and borders at 1. Operates within specified bounds.
+     * uses first-in, first out queue for storage
+     * @internal
+     */
+    floodFillSectionFIFO(img2D: Uint8Array, dims2D: readonly number[], minPt: readonly number[], maxPt: readonly number[]): void;
+    /**
      * Connects and fills the interior of drawn line segments in 2D slice space.
      * @internal
      */
@@ -3141,6 +3258,12 @@ declare class Niivue {
      * @see {@link https://niivue.com/demos/features/cactus.html | live demo usage}
      */
     refreshDrawing(isForceRedraw?: boolean, useClickToSegmentBitmap?: boolean): void;
+    /**
+     * close probabilistic atlas texture
+     * @example niivue.closePAQD();
+     * @internal
+     */
+    closePAQD(): void;
     /**
      * Creates a 2D 1-component uint8 texture on the GPU with given dimensions.
      * @internal
@@ -3723,6 +3846,17 @@ declare class Niivue {
      */
     drawAngleText(): void;
     /**
+     * Calculate and draw angle text for a completed angle.
+     * @internal
+     */
+    drawAngleTextForAngle(angle: {
+        firstLine: number[];
+        secondLine: number[];
+        sliceIndex: number;
+        sliceType: SLICE_TYPE;
+        slicePosition: number;
+    }): void;
+    /**
      * Calculate angle between two lines in degrees.
      * @internal
      */
@@ -3733,15 +3867,98 @@ declare class Niivue {
      */
     resetAngleMeasurement(): void;
     /**
+     * Get slice information for the current measurement/angle.
+     * @internal
+     */
+    getCurrentSliceInfo(): {
+        sliceIndex: number;
+        sliceType: SLICE_TYPE;
+        slicePosition: number;
+    };
+    /**
+     * Get the current slice position based on slice type.
+     * @internal
+     */
+    getCurrentSlicePosition(sliceType: SLICE_TYPE): number;
+    /**
+     * Check if a measurement/angle should be drawn on the current slice.
+     * @internal
+     */
+    shouldDrawOnCurrentSlice(sliceIndex: number, sliceType: SLICE_TYPE, slicePosition: number): boolean;
+    /**
+     * Clear all persistent measurement lines from the canvas.
+     * @example
+     * ```js
+     * nv.clearMeasurements()
+     * ```
+     */
+    clearMeasurements(): void;
+    /**
+     * Clear all persistent angle measurements from the canvas.
+     * @example
+     * ```js
+     * nv.clearAngles()
+     * ```
+     */
+    clearAngles(): void;
+    /**
+     * Clear all persistent measurements and angles from the canvas.
+     * @example
+     * ```js
+     * nv.clearAllMeasurements()
+     * ```
+     */
+    clearAllMeasurements(): void;
+    /**
      * Set the drag mode for mouse interactions.
      * @param mode - The drag mode to set ('none', 'contrast', 'measurement', 'angle', 'pan', 'slicer3D', 'callbackOnly', 'roiSelection')
      */
     setDragMode(mode: string | DRAG_MODE): void;
     /**
+     * Set custom mouse event configuration for button mappings.
+     * @param config - Mouse event configuration object
+     * @example
+     * ```js
+     * nv.setMouseEventConfig({
+     *   leftButton: {
+     *     primary: DRAG_MODE.windowing,
+     *     withShift: DRAG_MODE.measurement,
+     *     withCtrl: DRAG_MODE.crosshair
+     *   },
+     *   rightButton: DRAG_MODE.crosshair,
+     *   centerButton: DRAG_MODE.pan
+     * })
+     * ```
+     */
+    setMouseEventConfig(config: MouseEventConfig): void;
+    /**
+     * Set custom touch event configuration for touch gesture mappings.
+     * @param config - Touch event configuration object
+     * @example
+     * ```js
+     * nv.setTouchEventConfig({
+     *   singleTouch: DRAG_MODE.windowing,
+     *   doubleTouch: DRAG_MODE.pan
+     * })
+     * ```
+     */
+    setTouchEventConfig(config: TouchEventConfig): void;
+    /**
+     * Get current mouse event configuration.
+     * @returns Current mouse event configuration or undefined if using defaults
+     */
+    getMouseEventConfig(): MouseEventConfig | undefined;
+    /**
+     * Get current touch event configuration.
+     * @returns Current touch event configuration or undefined if using defaults
+     */
+    getTouchEventConfig(): TouchEventConfig | undefined;
+    /**
      * Draw a rectangle or outline at given position with specified color or default crosshair color.
      * @internal
      */
     drawRect(leftTopWidthHeight: number[], lineColor?: number[]): void;
+    private drawBoundsBox;
     /**
      * Draw a circle or outline at given position with specified color or default crosshair color.
      * @internal
@@ -3789,7 +4006,8 @@ declare class Niivue {
      */
     getLegendPanelHeight(panelScale?: number): number;
     /**
-     * Calculate and reserve canvas area for colorbar panel.
+     * Calculate and reserve canvas area for colorbar panel,
+     * respecting opts.bounds if defined.
      * @internal
      */
     reserveColorbarPanel(): number[];
@@ -3853,6 +4071,11 @@ declare class Niivue {
      * @internal
      */
     drawTextBelow(xy: number[], str: string, scale?: number, color?: number[] | null): void;
+    /**
+     * Draw text horizontally centered above the given coordinates.
+     * @internal
+     */
+    drawTextAbove(xy: number[], str: string, scale?: number, color?: number[] | null): void;
     /**
      * Update texture interpolation mode (nearest or linear) for background or overlay layer.
      * @internal
@@ -3923,10 +4146,14 @@ declare class Niivue {
      */
     draw2D(leftTopWidthHeight: number[], axCorSag: SLICE_TYPE, customMM?: number, imageWidthHeight?: number[]): void;
     /**
-     * Computes 3D model-view-projection matrices based on view angles and canvas size.
-     * @internal
+     * Build MVP, Model, and Normal matrices for rendering.
+     * @param _unused - reserved
+     * @param leftTopWidthHeight - viewport rectangle [x, y, w, h] in device pixels
+     * @param azimuth - azimuth rotation in degrees
+     * @param elevation - elevation rotation in degrees
+     * @param flipX - whether to mirror the X axis (default true for radiological convention)
      */
-    calculateMvpMatrix(_unused: unknown, leftTopWidthHeight: number[], azimuth: number, elevation: number): mat4[];
+    calculateMvpMatrix(_unused: unknown, leftTopWidthHeight: number[], azimuth: number, elevation: number, flipX?: boolean): mat4[];
     /**
      * Computes the model transformation matrix for the given azimuth and elevation.
      * Applies optional oblique RAS rotation if available.
@@ -4085,6 +4312,21 @@ declare class Niivue {
      */
     canvasPos2frac(canvasPos: number[]): vec3;
     /**
+     * Convert fractional volume coordinates to canvas pixel coordinates.
+     * Returns the first valid screen slice that contains the fractional coordinates.
+     * @internal
+     */
+    /**
+     * Convert fractional volume coordinates to canvas pixel coordinates with tile information.
+     * Returns both canvas position and the tile index for validation.
+     * @internal
+     */
+    frac2canvasPosWithTile(frac: vec3, preferredSliceType?: SLICE_TYPE): {
+        pos: number[];
+        tileIndex: number;
+    } | null;
+    frac2canvasPos(frac: vec3): number[] | null;
+    /**
      * Calculates scaled slice dimensions and position within the canvas.
      * n.b. beware of similarly named `sliceScale` method.
      * @internal
@@ -4141,6 +4383,49 @@ declare class Niivue {
      */
     calculateWidthHeight(sliceType: number, volScale: number[], containerWidth: number, containerHeight: number): [number, number];
     /**
+     * Convert opts.bounds into CSS pixel coordinates (for hit testing).
+     * @returns [x, y, width, height] in CSS pixels
+     */
+    private getBoundsRegionCSS;
+    /**
+     * Returns true if a mouse/touch event happened inside this instance’s bounds.
+     */
+    eventInBounds(evt: MouseEvent | Touch | TouchEvent): boolean;
+    /**
+     * Check whether the last known mouse cursor position is inside this instance's bounds.
+     *
+     * Used to filter keyboard events so they are only handled by the Niivue instance
+     * whose bounds currently contain the cursor.
+     *
+     * @returns true if the cursor is inside this.opts.bounds, false otherwise.
+     * @internal
+     */
+    private cursorInBounds;
+    /**
+     * Compute the current drawing region from opts.bounds.
+     * Returns [x, y, width, height] in device pixels, bottom-left origin.
+     */
+    private getBoundsRegion;
+    /**
+     * Return true if the given canvas pixel coordinates are inside this Niivue instance's bounds.
+     */
+    inBounds(x: number, y: number): boolean;
+    /**
+     * Rebind all textures for this instance.
+     * Call this at the start of every draw pass if multiple instances share a GL context.
+     */
+    private bindTextures;
+    /**
+     * Clear a rectangular region of this instance's canvas.
+     *
+     * @param mask - bitmask of buffers to clear (default: color+depth).
+     * @param ltwh - optional [x, y, w, h] region in *device px* (GL coords, bottom-left).
+     *   If not provided, clears the full instance bounds (getBoundsRegion).
+     *   For multiplanar panels, pass the panel’s own [x,y,w,h].
+     */
+    clearBounds(mask?: number, ltwh?: [number, number, number, number]): void;
+    private drawBoundsBorder;
+    /**
      * Core function to draw the entire scene including volumes, meshes, slices, overlays, colorbars, graphs, and handle user interaction like dragging.
      * @internal
      */
@@ -4160,6 +4445,29 @@ declare class Niivue {
      * @internal
      */
     set gl(gl: WebGL2RenderingContext | null);
+    /**
+     * Find the first and last slices containing drawing data along a given axis
+     * @param sliceType - The slice orientation (AXIAL, CORONAL, or SAGITTAL)
+     * @returns Object containing first and last slice indices, or null if no data found
+     */
+    findDrawingBoundarySlices(sliceType: SLICE_TYPE): {
+        first: number;
+        last: number;
+    } | null;
+    /**
+     * Interpolate between mask slices using geometric or intensity-guided methods
+     * @param sliceIndexLow - Lower slice index (optional, will auto-detect if not provided)
+     * @param sliceIndexHigh - Higher slice index (optional, will auto-detect if not provided)
+     * @param options - Interpolation options
+     */
+    interpolateMaskSlices(sliceIndexLow?: number, sliceIndexHigh?: number, options?: {
+        intensityWeight?: number;
+        binaryThreshold?: number;
+        intensitySigma?: number;
+        applySmoothingToSlices?: boolean;
+        useIntensityGuided?: boolean;
+        sliceType?: SLICE_TYPE;
+    }): void;
 }
 
-export { COLORMAP_TYPE, type Connectome, type ConnectomeOptions, DEFAULT_OPTIONS, DRAG_MODE, DRAG_MODE_PRIMARY, DRAG_MODE_SECONDARY, type DicomLoader, type DicomLoaderInput, type DocumentData, type DragReleaseParams, type ExportDocumentData, INITIAL_SCENE_DATA, LabelAnchorPoint, LabelLineTerminator, LabelTextAlignment, type LegacyConnectome, type LegacyNodes, MULTIPLANAR_TYPE, type NVConfigOptions, type NVConnectomeEdge, type NVConnectomeNode, NVDocument, NVImage, NVImageFromUrlOptions, NVLabel3D, NVLabel3DStyle, NVMesh, NVMeshFromUrlOptions, NVMeshLayerDefaults, NVMeshLoaders, NVMeshUtilities, NVUtilities, type NiftiHeader, type NiiVueLocation, type NiiVueLocationValue, Niivue, type Point, SHOW_RENDER, SLICE_TYPE, type Scene, type SyncOpts, type Volume, cmapper, ColorTables as colortables };
+export { COLORMAP_TYPE, type CompletedAngle, type CompletedMeasurement, type Connectome, type ConnectomeOptions, DEFAULT_OPTIONS, DRAG_MODE, type DicomLoader, type DicomLoaderInput, type DocumentData, type DragReleaseParams, type ExportDocumentData, INITIAL_SCENE_DATA, LabelAnchorPoint, LabelLineTerminator, LabelTextAlignment, type LegacyConnectome, type LegacyNodes, MULTIPLANAR_TYPE, type MouseEventConfig, type NVConfigOptions, type NVConnectomeEdge, type NVConnectomeNode, NVDocument, NVImage, NVImageFromUrlOptions, NVLabel3D, NVLabel3DStyle, NVMesh, NVMeshFromUrlOptions, NVMeshLayerDefaults, NVMeshLoaders, NVMeshUtilities, NVUtilities, type NiftiHeader, type NiiVueLocation, type NiiVueLocationValue, Niivue, PEN_TYPE, type Point, SHOW_RENDER, SLICE_TYPE, type Scene, type SyncOpts, type TouchEventConfig, type Volume, cmapper, ColorTables as colortables };
